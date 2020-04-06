@@ -17,6 +17,7 @@
 
 #include <cassert>
 #include <stack>
+#include <cmath>
 
 #include "hotstuff/util.h"
 #include "hotstuff/consensus.h"
@@ -85,11 +86,27 @@ bool HotStuffCore::on_deliver_blk(const block_t &blk) {
     return true;
 }
 
-void HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc) {
+void HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, const block_t &hva_blk, const quorum_cert_bt &hva_qc) {
     assert(qc->get_obj_hash() == Vote::proof_obj_hash(_hqc->get_hash()));
-    if (_hqc->height > hqc.first->height)
-    {
+
+    assert(hva_blk == nullptr || hva_qc->get_obj_hash() == Vote::proof_obj_hash(hva_blk->get_hash()));
+
+    // Both blocks must be from same view.
+    assert(hva_blk == nullptr || hva_blk->view == _hqc->view);
+
+    uint32_t height_hqc_ancestor = (hqc_ancestor.first != nullptr) ? hqc_ancestor.first->get_height(): -1;
+    uint32_t height_ra_blk = (hva_blk != nullptr) ? hva_blk->get_height(): -1;
+
+    if (_hqc->view > hqc.first->view ||
+            (_hqc->view == hqc.first->view && height_ra_blk > height_hqc_ancestor) ||
+            (_hqc->view == hqc.first->view && height_ra_blk == height_hqc_ancestor && _hqc->get_height() > hqc.first->get_height())
+    ){
         hqc = std::make_pair(_hqc, qc->clone());
+        if (_hqc->cert_type == RESPONSIVE_CERT){
+            hqc_ancestor = std::make_pair(_hqc, qc->clone());
+        }else if(hva_blk != nullptr) {
+            hqc_ancestor = std::make_pair(hva_blk, hva_qc->clone());
+        }
         on_hqc_update();
     }
 }
@@ -134,13 +151,24 @@ void HotStuffCore::_vote(const block_t &blk) {
     //set_blame_timer(3 * config.delta);
 }
 
-// 3. Blame
-void HotStuffCore::_blame() {
+
+// 3. Notify
+void HotStuffCore::_notify(const block_t &blk, const quorum_cert_bt &qc) {
+    const auto &blk_hash = blk->get_hash();
+
+    Notify notify(id, blk_hash, qc->clone(), this);
+
+    do_broadcast_notify(notify);
+}
+
+
+// 4. Blame
+void HotStuffCore::_blame(bool equiv) {
     stop_blame_timer();
     Blame blame(id, view,
             create_part_cert(
                 *priv_key,
-                Blame::proof_obj_hash(view)), this);
+                Blame::proof_obj_hash(view)), equiv, this);
     on_receive_blame(blame);
     do_broadcast_blame(blame);
 }
@@ -176,6 +204,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     block_t bnew = storage->add_blk(
         new Block(parents, cmds,
             hqc.second->clone(), std::move(extra),
+            view, // current view number
             parents[0]->height + 1,
             hqc.first,
             nullptr
@@ -192,7 +221,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     finished_propose[bnew] = true;
     _vote(bnew);
     on_propose_(prop);
-    /* boradcast to other replicas */
+    /* broadcast to other replicas */
     do_broadcast_proposal(prop);
     return bnew;
 }
@@ -200,11 +229,12 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     if (view_trans) return;
     LOG_PROTO("got %s", std::string(prop).c_str());
+
     block_t bnew = prop.blk;
     if (finished_propose[bnew]) return;
     sanity_check_delivered(bnew);
     if (bnew->qc_ref)
-        update_hqc(bnew->qc_ref, bnew->qc);
+        update_hqc(bnew->qc_ref, bnew->qc, hqc_ancestor.first, hqc_ancestor.second);
     bool opinion = false;
     auto &pslot = proposals[bnew->height];
     if (pslot.size() <= 1)
@@ -214,7 +244,7 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
         {
             // TODO: put equivocating blocks in the Blame msg
             LOG_INFO("conflicting proposal detected, start blaming");
-            _blame();
+            _blame(true);
         }
         else opinion = true;
     }
@@ -244,6 +274,7 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
 void HotStuffCore::on_receive_vote(const Vote &vote) {
     LOG_PROTO("got %s", std::string(vote).c_str());
     LOG_PROTO("now state: %s", std::string(*this).c_str());
+
     block_t blk = get_delivered_blk(vote.blk_hash);
     assert(vote.cert);
     if (!finished_propose[blk])
@@ -254,7 +285,7 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         on_receive_proposal(Proposal(vote.voter, blk, nullptr));
     }
     size_t qsize = blk->voted.size();
-    if (qsize >= config.nmajority) return;
+    // if (qsize >= config.nmajority) return;
     if (!blk->voted.insert(vote.voter).second)
     {
         LOG_WARN("duplicate vote for %s from %d", get_hex10(vote.blk_hash).c_str(), vote.voter);
@@ -266,21 +297,52 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         qc = create_quorum_cert(Vote::proof_obj_hash(blk->get_hash()));
     }
     qc->add_part(vote.voter, *vote.cert);
-    if (qsize + 1 == config.nmajority)
-    {
+    qsize++;
+
+    if(qsize == config.nmajority){
+        blk->cert_type = SYNCHRONOUS_CERT;
         qc->compute();
-        update_hqc(blk, qc);
+        update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
+
+    } else if(qsize == config.nresponsive){
+        blk->cert_type = RESPONSIVE_CERT;
+        qc->compute();
+        update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
+
+        check_commit(blk);
+        stop_commit_timer(blk->height);
+
         on_qc_finish(blk);
+        _notify(blk, qc);
     }
 }
 
 void HotStuffCore::on_receive_notify(const Notify &notify) {
     block_t blk = get_delivered_blk(notify.blk_hash);
-    update_hqc(blk, notify.qc);
+
+    if (!finished_propose[blk])
+    {
+        // FIXME: fill notifier as proposer as a quickfix here, may be inaccurate
+        on_receive_proposal(Proposal(notify.notifier, blk, nullptr));
+    }
+    LOG_PROTO("got notify blk=%s", std::string(*blk).c_str());
+    update_hqc(blk, notify.qc, hqc_ancestor.first, hqc_ancestor.second);
+    if (!view_trans) check_commit(blk);
+}
+
+void HotStuffCore::on_receive_status(const Status &status) {
+    block_t hqc_blk = get_delivered_blk(status.hqc_blk_hash);
+    block_t responsive_ancestor_blk_hash = nullptr;
+    if (status.responsive_ancestor_blk_hash != nullptr) {
+        responsive_ancestor_blk_hash = get_delivered_blk(status.responsive_ancestor_blk_hash);
+    }
+    update_hqc(hqc_blk, status.hqc, responsive_ancestor_blk_hash, status.responsive_ancestor_qc);
 }
 
 void HotStuffCore::on_receive_blame(const Blame &blame) {
     if (view_trans) return; // already in view transition
+
+    //Note: Nibesh: It doesn't check for which view, the blame is for. Could be blame message from previous views.
     size_t qsize = blamed.size();
     if (qsize >= config.nmajority) return;
     if (!blamed.insert(blame.blamer).second)
@@ -290,7 +352,7 @@ void HotStuffCore::on_receive_blame(const Blame &blame) {
     }
     assert(blame_qc);
     blame_qc->add_part(blame.blamer, *blame.cert);
-    if (++qsize == config.nmajority)
+    if (++qsize == config.nmajority || blame.equiv)
         _new_view();
 }
 
@@ -314,17 +376,20 @@ void HotStuffCore::on_viewtrans_timeout() {
     proposals.clear();
     blame_qc = create_quorum_cert(Blame::proof_obj_hash(view));
     blamed.clear();
-    set_blame_timer(3 * config.delta);
+    // 2*\Delta wait in OptSync
+    set_blame_timer(2 * config.delta);
     on_view_change(); // notify the PaceMaker of the view change
     LOG_INFO("entering view %d", view);
-    // send the highest certified block
-    Notify notify(hqc.first->get_hash(), hqc.second->clone(), this);
-    do_notify(notify);
+    // send the highest certified block and its highest-view-v-ancestor
+
+    Status status(hqc.first->get_hash(), hqc.second->clone(), hqc_ancestor.first->get_hash(), hqc_ancestor.second->clone(), this);
+    do_status(status);
 }
 
 /*** end HotStuff protocol logic ***/
 void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     config.nmajority = config.nreplicas - nfaulty;
+    config.nresponsive = (size_t) floor(3*config.nreplicas/4.0) + 1;
     config.delta = delta;
     blame_qc = create_quorum_cert(Blame::proof_obj_hash(view));
     b0->qc = create_quorum_cert(Vote::proof_obj_hash(b0->get_hash()));
@@ -332,6 +397,7 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     b0->self_qc = b0->qc->clone();
     b0->qc_ref = b0;
     hqc = std::make_pair(b0, b0->qc->clone());
+    hqc_ancestor = std::make_pair(nullptr, nullptr);
 }
 
 void HotStuffCore::prune(uint32_t staleness) {
@@ -450,6 +516,19 @@ HotStuffCore::operator std::string () const {
       << "view=" << std::to_string(view) << " "
       << "tails=" << std::to_string(tails.size()) << ">";
     return std::move(s);
+}
+
+
+CertType HotStuffCore::block_cert_type(const block_t &blk){
+    size_t vote_size = blk->voted.size();
+    if(vote_size == config.nreplicas){
+        return FULL_CERT;
+    }else if(vote_size == config.nresponsive){
+        return RESPONSIVE_CERT;
+    }else if(vote_size == config.nmajority){
+        return SYNCHRONOUS_CERT;
+    }
+    return UNDEFINED_CERT;
 }
 
 }

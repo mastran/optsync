@@ -41,11 +41,11 @@ void MsgVote::postponed_parse(HotStuffCore *hsc) {
     serialized >> vote;
 }
 
-const opcode_t MsgNotify::opcode;
-MsgNotify::MsgNotify(const Notify &notify) { serialized << notify; }
-void MsgNotify::postponed_parse(HotStuffCore *hsc) {
-    notify.hsc = hsc;
-    serialized >> notify;
+const opcode_t MsgStatus::opcode;
+MsgStatus::MsgStatus(const Status &status) { serialized << status; }
+void MsgStatus::postponed_parse(HotStuffCore *hsc) {
+    status.hsc = hsc;
+    serialized >> status;
 }
 
 const opcode_t MsgBlame::opcode;
@@ -60,6 +60,13 @@ MsgBlameNotify::MsgBlameNotify(const BlameNotify &bn) { serialized << bn; }
 void MsgBlameNotify::postponed_parse(HotStuffCore *hsc) {
     bn.hsc = hsc;
     serialized >> bn;
+}
+
+const opcode_t MsgNotify::opcode;
+MsgNotify::MsgNotify(const hotstuff::Notify &notify) {serialized << notify;}
+void MsgNotify::postponed_parse(HotStuffCore *hsc) {
+    notify.hsc = hsc;
+    serialized >> notify;
 }
 
 const opcode_t MsgReqBlock::opcode;
@@ -244,19 +251,37 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
     });
 }
 
-void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn) {
+void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
     const NetAddr &peer = conn->get_peer_addr();
     if (peer.is_null()) return;
     msg.postponed_parse(this);
+
     RcObj<Notify> n(new Notify(std::move(msg.notify)));
     promise::all(std::vector<promise_t>{
-        async_deliver_blk(n->blk_hash, peer),
-        n->verify(vpool)
-    }).then([this, n, peer](const promise::values_t values) {
+            async_deliver_blk(n->blk_hash, peer),
+            n->verify(vpool),
+    }).then([this, n](const promise::values_t values) {
         if (!promise::any_cast<bool>(values[1]))
-            LOG_WARN("invalid notify message from %s", std::string(peer).c_str());
+            LOG_WARN("invalid notify from %d", n->notifier);
         else
             on_receive_notify(*n);
+    });
+
+}
+
+void HotStuffBase::status_handler(MsgStatus &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer_addr();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<Status> s(new Status(std::move(msg.status)));
+    promise::all(std::vector<promise_t>{
+        async_deliver_blk(s->hqc_blk_hash, peer),
+        s->verify(vpool)
+    }).then([this, s, peer](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid status message from %s", std::string(peer).c_str());
+        else
+            on_receive_status(*s);
     });
 }
 
@@ -479,6 +504,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::propose_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::vote_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::notify_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::status_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::blame_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::blamenotify_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::req_blk_handler, this, _1, _2));
@@ -487,6 +513,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.start();
     pn.listen(listen_addr);
 }
+
 void HotStuffBase::do_consensus(const block_t &blk) {
     pmaker->on_consensus(blk);
 }
@@ -502,13 +529,13 @@ void HotStuffBase::do_decide(Finality &&fin) {
     }
 }
 
-void HotStuffBase::do_notify(const Notify &notify) {
-    MsgNotify m(notify);
+void HotStuffBase::do_status(const Status &status) {
+    MsgStatus m(status);
     ReplicaID next_proposer = pmaker->get_proposer();
     if (next_proposer != get_id())
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
-        on_receive_notify(notify);
+        on_receive_status(status);
 }
 
 HotStuffBase::~HotStuffBase() {}

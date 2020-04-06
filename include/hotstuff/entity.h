@@ -37,6 +37,13 @@ enum EntityType {
     ENT_TYPE_BLK = 0x1
 };
 
+enum CertType {
+    UNDEFINED_CERT = 0x00,
+    SYNCHRONOUS_CERT = 0x01,
+    RESPONSIVE_CERT = 0x02,
+    FULL_CERT = 0x03
+};
+
 struct ReplicaInfo {
     ReplicaID id;
     salticidae::NetAddr addr;
@@ -62,6 +69,7 @@ class ReplicaConfig {
     public:
     size_t nreplicas;
     size_t nmajority;
+    size_t nresponsive;
     double delta;
 
     ReplicaConfig(): nreplicas(0), nmajority(0), delta(0) {}
@@ -125,6 +133,10 @@ class Block {
     uint256_t qc_ref_hash;
     bytearray_t extra;
 
+    // highest view in which block gets certified
+    uint32_t view;
+    CertType cert_type;
+
     /* the following fields can be derived from above */
     uint256_t hash;
     std::vector<block_t> parents;
@@ -139,14 +151,14 @@ class Block {
     public:
     Block():
         qc(nullptr),
-        qc_ref(nullptr),
+        qc_ref(nullptr), view(0),
         self_qc(nullptr), height(0),
         delivered(false), decision(0) {}
 
     Block(bool delivered, int8_t decision):
         qc(nullptr),
         hash(salticidae::get_hash(*this)),
-        qc_ref(nullptr),
+        qc_ref(nullptr), view(0),
         self_qc(nullptr), height(0),
         delivered(delivered), decision(decision) {}
 
@@ -154,6 +166,7 @@ class Block {
         const std::vector<uint256_t> &cmds,
         quorum_cert_bt &&qc,
         bytearray_t &&extra,
+        uint32_t view,
         uint32_t height,
         const block_t &qc_ref,
         quorum_cert_bt &&self_qc,
@@ -167,6 +180,7 @@ class Block {
             parents(parents),
             qc_ref(qc_ref),
             self_qc(std::move(self_qc)),
+            view(view),
             height(height),
             delivered(0),
             decision(decision) {}
@@ -196,6 +210,8 @@ class Block {
 
     bool is_delivered() const { return delivered; }
 
+    uint32_t get_view() const {return view; }
+
     uint32_t get_height() const { return height; }
 
     const quorum_cert_bt &get_qc() const { return qc; }
@@ -210,7 +226,9 @@ class Block {
         DataStream s;
         s << "<block "
           << "id="  << get_hex10(hash) << " "
+          << "view=" << std::to_string(view) << " "
           << "height=" << std::to_string(height) << " "
+          << "cert_type=" << ((cert_type==RESPONSIVE_CERT)? "resp": (cert_type==SYNCHRONOUS_CERT) ? "sync": "") << " "
           << "parent=" << get_hex10(parent_hashes[0]) << " "
           << "qc_ref=" << (qc_ref ? get_hex10(qc_ref->get_hash()) : "null") << ">";
         return std::move(s);

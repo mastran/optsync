@@ -59,12 +59,12 @@ struct MsgVote {
     void postponed_parse(HotStuffCore *hsc);
 };
 
-struct MsgNotify {
+struct MsgStatus {
     static const opcode_t opcode = 0x4;
     DataStream serialized;
-    Notify notify;
-    MsgNotify(const Notify &);
-    MsgNotify(DataStream &&s): serialized(std::move(s)) {}
+    Status status;
+    MsgStatus(const Status &);
+    MsgStatus(DataStream &&s): serialized(std::move(s)) {}
     void postponed_parse(HotStuffCore *hsc);
 };
 
@@ -83,6 +83,15 @@ struct MsgBlameNotify {
     BlameNotify bn;
     MsgBlameNotify(const BlameNotify &);
     MsgBlameNotify(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgNotify {
+    static const opcode_t opcode = 0x7;
+    DataStream serialized;
+    Notify notify;
+    MsgNotify(const Notify &);
+    MsgNotify(DataStream &&s): serialized(std::move(s)) {}
     void postponed_parse(HotStuffCore *hsc);
 };
 
@@ -238,6 +247,7 @@ class HotStuffBase: public HotStuffCore {
     /** deliver consensus message: <vote> */
     inline void vote_handler(MsgVote &&, const Net::conn_t &);
     inline void notify_handler(MsgNotify &&, const Net::conn_t &);
+    inline void status_handler(MsgStatus &&, const Net::conn_t &);
     inline void blame_handler(MsgBlame &&, const Net::conn_t &);
     inline void blamenotify_handler(MsgBlameNotify &&, const Net::conn_t &);
 
@@ -277,6 +287,11 @@ class HotStuffBase: public HotStuffCore {
 
     }
 
+    void do_broadcast_notify(const Notify &notify) override {
+        _do_broadcast<Notify, MsgNotify>(notify);
+    }
+
+
     void do_broadcast_blame(const Blame &blame) override {
         _do_broadcast<Blame, MsgBlame>(blame);
     }
@@ -285,7 +300,7 @@ class HotStuffBase: public HotStuffCore {
         _do_broadcast<BlameNotify, MsgBlameNotify>(bn);
     }
 
-    void do_notify(const Notify &notify) override;
+    void do_status(const Status &status) override;
 
     void set_commit_timer(const block_t &blk, double t_sec) override;
     void stop_commit_timer(uint32_t height) override;
