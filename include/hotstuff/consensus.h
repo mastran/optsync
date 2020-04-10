@@ -71,6 +71,7 @@ class HotStuffCore {
     promise_t hqc_update_waiting;
     promise_t view_change_waiting;
     promise_t view_trans_waiting;
+    promise_t status_waiting;
     /* == feature switches == */
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
@@ -78,19 +79,18 @@ class HotStuffCore {
     block_t get_delivered_blk(const uint256_t &blk_hash);
     void sanity_check_delivered(const block_t &blk);
     void check_commit(const block_t &_hqc);
-    void update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, const block_t &hva_blk, const quorum_cert_bt &hva_qc);
+    bool update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, const block_t &hva_blk, const quorum_cert_bt &hva_qc);
     void on_hqc_update();
     void on_qc_finish(const block_t &blk);
     void on_propose_(const Proposal &prop);
     void on_receive_proposal_(const Proposal &prop);
     void on_view_change();
     void on_view_trans();
+    void on_status_complete();
     void _vote(const block_t &blk);
     void _notify(const block_t &blk, const quorum_cert_bt &qc);
     void _blame(bool equiv=false);
     void _new_view();
-
-    CertType block_cert_type(const block_t &blk);
 
     protected:
     ReplicaID id;                  /**< identity of the replica itself */
@@ -130,9 +130,13 @@ class HotStuffCore {
     void on_receive_status(const Status &status);
     void on_receive_blame(const Blame &blame);
     void on_receive_blamenotify(const BlameNotify &blame);
+    void on_receive_new_view(const Status &status);
     void on_commit_timeout(const block_t &blk);
     void on_blame_timeout();
     void on_viewtrans_timeout();
+    void on_status_timeout();
+
+    void send_new_view();
 
     /** Call to submit new commands to be decided (executed). "Parents" must
      * contain at least one block, and the first block is the actual parent,
@@ -160,13 +164,18 @@ class HotStuffCore {
     virtual void do_broadcast_blame(const Blame &blame) = 0;
     virtual void do_broadcast_blamenotify(const BlameNotify &bn) = 0;
     virtual void do_status(const Status &status) = 0;
+    virtual void do_broadcast_new_view(const Status &status)=0;
+
     virtual void set_commit_timer(const block_t &blk, double t_sec) = 0;
     virtual void set_blame_timer(double t_sec) = 0;
     virtual void stop_commit_timer(uint32_t height) = 0;
     virtual void stop_commit_timer_all() = 0;
     virtual void stop_blame_timer() = 0;
+    virtual void reset_blame_timer(double t_sec) = 0;
     virtual void set_viewtrans_timer(double t_sec) = 0;
     virtual void stop_viewtrans_timer() = 0;
+
+    virtual void stop_status_timer() = 0;
 
     /* The user plugs in the detailed instances for those
      * polymorphic data types. */
@@ -204,6 +213,8 @@ class HotStuffCore {
     /** Get a promise resolved before a view change. */
     promise_t async_wait_view_trans();
 
+    promise_t async_wait_status_complete();
+
     /* Other useful functions */
     const block_t &get_genesis() { return b0; }
     const block_t &get_hqc() { return hqc.first; }
@@ -213,6 +224,7 @@ class HotStuffCore {
     uint32_t get_view() const { return view; }
     operator std::string () const;
     void set_vote_disabled(bool f) { vote_disabled = f; }
+    virtual void set_status_timer(double t_sec) = 0;
 };
 
 
@@ -386,32 +398,34 @@ struct Notify: public Serializable {
 
 struct Status: public Serializable {
     uint256_t hqc_blk_hash;
-    quorum_cert_bt hqc;
 
+    quorum_cert_bt hqc;
     uint256_t responsive_ancestor_blk_hash; // highest-view-v-responsive ancestor
+
     quorum_cert_bt responsive_ancestor_qc;
-    
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
+
+    ReplicaID sender;
 
     Status(): hqc(nullptr), responsive_ancestor_qc(nullptr), hsc(nullptr) {}
     Status(const uint256_t hqc_blk_hash,
            quorum_cert_bt &&hqc,
            const uint256_t responsive_ancestor_blk_hash,
            quorum_cert_bt &&responsive_ancestor_qc,
-           HotStuffCore *hsc):
+           HotStuffCore *hsc, ReplicaID sender):
             hqc_blk_hash(hqc_blk_hash),
             hqc(std::move(hqc)),
             responsive_ancestor_blk_hash(responsive_ancestor_blk_hash),
             responsive_ancestor_qc(std::move(responsive_ancestor_qc)),
-            hsc(hsc) {}
+            hsc(hsc), sender(sender) {}
 
     Status(const Status &other):
             hqc_blk_hash(other.hqc_blk_hash),
             hqc(other.hqc ? other.hqc->clone() : nullptr),
             responsive_ancestor_blk_hash(other.responsive_ancestor_blk_hash),
             responsive_ancestor_qc(other.responsive_ancestor_qc ? other.responsive_ancestor_qc->clone() : nullptr),
-            hsc(other.hsc) {}
+            hsc(other.hsc), sender(other.sender) {}
 
     Status(Status &&other) = default;
     
@@ -442,8 +456,8 @@ struct Status: public Serializable {
     operator std::string () const {
         DataStream s;
         s << "<status "
-          << "hqc_blk=" << get_hex10(hqc_blk_hash) << ">"
-          << "ra_blk=" << get_hex10(responsive_ancestor_blk_hash) << ">";
+          << "hqc_blk=" << get_hex10(hqc_blk_hash) << " "
+          << "hva_blk=" << get_hex10(responsive_ancestor_blk_hash) << ">";
         return std::move(s);
     }
 };

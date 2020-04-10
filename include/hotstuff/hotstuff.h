@@ -95,6 +95,15 @@ struct MsgNotify {
     void postponed_parse(HotStuffCore *hsc);
 };
 
+struct MsgNewView {
+    static const opcode_t opcode = 0x08;
+    DataStream serialized;
+    Status status;
+    MsgNewView(const Status &);
+    MsgNewView(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
 struct MsgReqBlock {
     static const opcode_t opcode = 0x2;
     DataStream serialized;
@@ -182,6 +191,7 @@ class HotStuffBase: public HotStuffCore {
     std::unordered_map<uint32_t, TimerEvent> commit_timers;
     TimerEvent blame_timer;
     TimerEvent viewtrans_timer;
+    TimerEvent status_timer;
 
     private:
     /** whether libevent handle is owned by itself */
@@ -251,6 +261,8 @@ class HotStuffBase: public HotStuffCore {
     inline void blame_handler(MsgBlame &&, const Net::conn_t &);
     inline void blamenotify_handler(MsgBlameNotify &&, const Net::conn_t &);
 
+    inline void new_view_handler(MsgNewView &&, const Net::conn_t &);
+
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
     /** receives a block */
@@ -300,6 +312,10 @@ class HotStuffBase: public HotStuffCore {
         _do_broadcast<BlameNotify, MsgBlameNotify>(bn);
     }
 
+    void do_broadcast_new_view(const Status &status) override {
+        _do_broadcast<Status, MsgNewView>(status);
+    }
+
     void do_status(const Status &status) override;
 
     void set_commit_timer(const block_t &blk, double t_sec) override;
@@ -307,8 +323,12 @@ class HotStuffBase: public HotStuffCore {
     void stop_commit_timer_all() override;
     void set_blame_timer(double t_sec) override;
     void stop_blame_timer() override;
+    void reset_blame_timer(double t_sec) override;
     void set_viewtrans_timer(double t_sec) override;
     void stop_viewtrans_timer() override;
+
+    void set_status_timer(double t_sec) override;
+    void stop_status_timer() override;
 
     void do_decide(Finality &&) override;
     void do_consensus(const block_t &blk) override;

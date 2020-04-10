@@ -245,6 +245,9 @@ class PMRoundRobinProposer: virtual public PaceMaker {
     promise_t pm_qc_finish;
     promise_t pm_wait_propose;
     promise_t pm_qc_manual;
+    promise_t pm_view_change;
+    promise_t pm_status;
+
 
     void reg_proposal() {
         hsc->async_wait_proposal().then([this](const Proposal &prop) {
@@ -275,6 +278,46 @@ class PMRoundRobinProposer: virtual public PaceMaker {
                 });
             locked = true;
         }
+    }
+
+    void view_change_complete(){
+        pm_view_change.reject();
+        (pm_view_change = hsc->async_wait_view_change())
+            .then([this](){
+                rotate();
+
+                if (proposer == hsc->get_id()) {
+                    HOTSTUFF_LOG_PROTO("Setting Status timer");
+                    hsc->set_status_timer(2 * hsc->get_config().delta);
+                    status_complete();
+                }
+                view_change_complete();
+            });
+    }
+
+    void status_complete(){
+        pm_status.reject();
+        (pm_status = hsc->async_wait_status_complete())
+            .then([this](){
+                HOTSTUFF_LOG_PROTO("Sending New View %d Proposer: %d", hsc->get_view(), hsc->get_id());
+                // New-view.
+                promise_t pm;
+                pending_beats.push(pm);
+                proposer_update_last_proposed();
+                hsc->send_new_view();
+
+                auto hs = static_cast<hotstuff::HotStuffBase *>(hsc);
+                hs->do_elected();
+                hs->get_tcall().async_call([this, hs](salticidae::ThreadCall::Handle &) {
+                    auto &pending = hs->get_decision_waiting();
+                    if (!pending.size()) return;
+                    HOTSTUFF_LOG_PROTO("reproposing pending commands");
+                    std::vector<uint256_t> cmds;
+                    for (auto &p: pending)
+                        cmds.push_back(p.first);
+                    do_new_consensus(0, cmds);
+                });
+            });
     }
 
     void proposer_update_last_proposed() {
@@ -323,9 +366,9 @@ class PMRoundRobinProposer: virtual public PaceMaker {
         pm_wait_propose.reject();
         pm_qc_manual.reject();
         // start timer
-        timer = TimerEvent(ec, salticidae::generic_bind(&PMRoundRobinProposer::on_exp_timeout, this, _1));
-        timer.add(exp_timeout);
-        exp_timeout *= 2;
+//        timer = TimerEvent(ec, salticidae::generic_bind(&PMRoundRobinProposer::on_exp_timeout, this, _1));
+//        timer.add(exp_timeout);
+//        exp_timeout *= 2;
     }
 
     void stop_rotate() {
@@ -380,6 +423,7 @@ class PMRoundRobinProposer: virtual public PaceMaker {
     void init() {
         exp_timeout = base_timeout;
         stop_rotate();
+        view_change_complete();
     }
 
     ReplicaID get_proposer() override {

@@ -69,6 +69,13 @@ void MsgNotify::postponed_parse(HotStuffCore *hsc) {
     serialized >> notify;
 }
 
+const opcode_t MsgNewView::opcode;
+MsgNewView::MsgNewView(const Status &status) { serialized << status; }
+void MsgNewView::postponed_parse(HotStuffCore *hsc) {
+    status.hsc = hsc;
+    serialized >> status;
+}
+
 const opcode_t MsgReqBlock::opcode;
 MsgReqBlock::MsgReqBlock(const std::vector<uint256_t> &blk_hashes) {
     serialized << htole((uint32_t)blk_hashes.size());
@@ -315,6 +322,24 @@ void HotStuffBase::blamenotify_handler(MsgBlameNotify &&msg, const Net::conn_t &
     });
 }
 
+void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer_addr();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<Status> s(new Status(std::move(msg.status)));
+    promise::all(std::vector<promise_t>{
+            async_deliver_blk(s->hqc_blk_hash, peer),
+            s->verify(vpool)
+    }).then([this, s, peer](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid status message from %s", std::string(peer).c_str());
+        else
+            on_receive_new_view(*s);
+    });
+
+}
+
+
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
 #ifdef SYNCHS_NOTIMER
     on_commit_timeout(blk);
@@ -349,6 +374,11 @@ void HotStuffBase::stop_blame_timer() {
     blame_timer.clear();
 }
 
+void HotStuffBase::reset_blame_timer(double t_sec){
+    stop_blame_timer();
+    set_blame_timer(t_sec);
+}
+
 void HotStuffBase::set_viewtrans_timer(double t_sec) {
     viewtrans_timer = TimerEvent(ec, [this](TimerEvent &) {
         on_viewtrans_timeout();
@@ -360,6 +390,19 @@ void HotStuffBase::set_viewtrans_timer(double t_sec) {
 void HotStuffBase::stop_viewtrans_timer() {
     viewtrans_timer.clear();
 }
+
+void HotStuffBase::set_status_timer(double t_sec) {
+    status_timer = TimerEvent(ec, [this](TimerEvent &){
+        on_status_timeout();
+        stop_status_timer();
+    });
+    status_timer.add(t_sec);
+}
+
+void HotStuffBase::stop_status_timer() {
+    status_timer.clear();
+}
+
 
 void HotStuffBase::req_blk_handler(MsgReqBlock &&msg, const Net::conn_t &conn) {
     const NetAddr replica = conn->get_peer_addr();
@@ -509,6 +552,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::blamenotify_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::req_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::resp_blk_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_view_handler, this, _1, _2));
     pn.reg_conn_handler(salticidae::generic_bind(&HotStuffBase::conn_handler, this, _1, _2));
     pn.start();
     pn.listen(listen_addr);
@@ -532,6 +576,8 @@ void HotStuffBase::do_decide(Finality &&fin) {
 void HotStuffBase::do_status(const Status &status) {
     MsgStatus m(status);
     ReplicaID next_proposer = pmaker->get_proposer();
+
+//    LOG_INFO("Sending status: %d, %s", next_proposer, std::string(status).c_str());
     if (next_proposer != get_id())
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
@@ -581,6 +627,7 @@ void HotStuffBase::start(
             }
             else
                 e.second(Finality(id, 0, 0, 0, cmd_hash, uint256_t()));
+
             if (proposer != get_id()) continue;
             cmd_pending_buffer.push(cmd_hash);
             if (cmd_pending_buffer.size() >= blk_size)

@@ -361,8 +361,8 @@ void HotStuffApp::start(const std::vector<std::tuple<NetAddr, bytearray_t, bytea
     });
     ev_stat_timer.add(stat_period);
     impeach_timer = TimerEvent(ec, [this](TimerEvent &) {
-        if (get_decision_waiting().size())
-            get_pace_maker()->impeach();
+//        if (get_decision_waiting().size())
+//            get_pace_maker()->impeach();
         reset_imp_timer();
     });
     impeach_timer.add(impeach_timeout);
