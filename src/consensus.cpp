@@ -222,6 +222,13 @@ void HotStuffCore::send_new_view() {
     Proposal prop(id, hqc.first, nullptr);
     on_propose_(prop);
     do_broadcast_new_view(status);
+    LOG_INFO("Sending NewView %d Status: %s", view, std::string(status).c_str());
+
+    block_t blk = hqc.first;
+    blk->view = view;
+    // clear voter list and self_qc from previous view
+    blk->self_qc = nullptr;
+    blk->voted.clear();
 
     _vote(hqc.first);
 }
@@ -462,8 +469,8 @@ void HotStuffCore::on_viewtrans_timeout() {
     blame_qc = create_quorum_cert(Blame::proof_obj_hash(view));
     blamed.clear();
 
-    // 2*\Delta wait in OptSync
-    set_blame_timer(2 * config.delta);
+    // 4*\Delta wait in OptSync
+    set_blame_timer(4 * config.delta);
     on_view_change(); // notify the PaceMaker of the view change
     LOG_INFO("entering view %d", view);
 
