@@ -146,7 +146,9 @@ class Block {
     bool delivered;
     int8_t decision;
 
+    bool self_pre_committed;
     std::unordered_set<ReplicaID> voted;
+    std::unordered_set<ReplicaID> preCommitted;
 
     public:
     Block():

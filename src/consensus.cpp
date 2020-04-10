@@ -152,7 +152,8 @@ void HotStuffCore::_vote(const block_t &blk) {
     on_receive_vote(vote);
 #endif
     do_broadcast_vote(vote);
-    set_commit_timer(blk, 2 * config.delta);
+
+    set_precommit_timer(blk, 2 * config.delta);
     //set_blame_timer(3 * config.delta);
 }
 
@@ -166,6 +167,12 @@ void HotStuffCore::_notify(const block_t &blk, const quorum_cert_bt &qc) {
     do_broadcast_notify(notify);
 }
 
+void HotStuffCore::_precommit(const hotstuff::block_t &blk) {
+    blk->self_pre_committed = true;
+    blk->preCommitted.insert(id);
+    PreCommit preCommit(id, blk->get_hash(), view, this);
+    do_broadcast_precommit(preCommit);
+}
 
 // 4. Blame
 void HotStuffCore::_blame(bool equiv) {
@@ -180,6 +187,7 @@ void HotStuffCore::_blame(bool equiv) {
     if(equiv){
         view_trans = true;
         stop_commit_timer_all();
+        stop_precommit_timer_all();
         set_viewtrans_timer(2 * config.delta);
     }
 }
@@ -199,7 +207,9 @@ void HotStuffCore::_new_view() {
     on_view_trans();
     on_receive_blamenotify(bn);
     do_broadcast_blamenotify(bn);
+
     stop_commit_timer_all();
+    stop_precommit_timer_all();
     set_viewtrans_timer(2 * config.delta);
 }
 
@@ -354,16 +364,41 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
         // Start proposing new blocks
         on_qc_finish(blk);
-
-    }
-    else if(qsize == config.nresponsive){
+    } else if(qsize == config.nresponsive){
         blk->cert_type = RESPONSIVE_CERT;
         qc->compute();
 
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
-        stop_commit_timer(blk->height);
-        check_commit(blk);
+        stop_precommit_timer(blk->height);
+
+        // For Simplicity, set commit timer to 2\Delta.
+        set_commit_timer(blk, 2*config.delta);
+
+        _precommit(blk);
         _notify(blk, qc);
+    }
+}
+
+void HotStuffCore::on_receive_precommit(const PreCommit &preCommit) {
+    LOG_PROTO("got PreCommit from %d for blk=", preCommit.replicaID, get_hex10(preCommit.blk_hash));
+
+    block_t blk = get_delivered_blk(preCommit.blk_hash);
+
+    if (!finished_propose[blk])
+    {
+        // FIXME: fill voter as proposer as a quickfix here, may be inaccurate
+        // for some PaceMakers
+        //finished_propose[blk] = true;
+        on_receive_proposal(Proposal(preCommit.replicaID, blk, nullptr));
+    }
+
+    if (!blk->preCommitted.insert(preCommit.replicaID).second) return;
+    size_t qsize = blk->preCommitted.size();
+
+    if(qsize == config.nresponsive){
+        stop_commit_timer(blk->height);
+        stop_precommit_timer(blk->height);
+        check_commit(blk);
     }
 }
 
@@ -383,7 +418,11 @@ void HotStuffCore::on_receive_notify(const Notify &notify) {
     }
 
     update_hqc(blk, notify.qc, hqc_ancestor.first, hqc_ancestor.second);
-    if (!view_trans) check_commit(blk);
+    if (!view_trans && !blk->self_pre_committed) {
+        stop_precommit_timer(blk->height);
+        set_commit_timer(blk, 2 * config.delta);
+        _precommit(blk);
+    }
 }
 
 void HotStuffCore::on_receive_status(const Status &status) {
@@ -415,6 +454,7 @@ void HotStuffCore::on_receive_blame(const Blame &blame) {
     } else if(blame.equiv){
         view_trans = true;
         stop_commit_timer_all();
+        stop_precommit_timer_all();
         set_viewtrans_timer(2 * config.delta);
     }
 }
@@ -453,6 +493,10 @@ void HotStuffCore::on_receive_new_view(const Status &status) {
     }
 }
 
+void HotStuffCore::on_precommit_timeout(const hotstuff::block_t &blk) {
+    set_commit_timer(blk, config.delta);
+    _precommit(blk);
+}
 
 void HotStuffCore::on_commit_timeout(const block_t &blk) { check_commit(blk); }
 

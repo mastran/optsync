@@ -63,10 +63,17 @@ void MsgBlameNotify::postponed_parse(HotStuffCore *hsc) {
 }
 
 const opcode_t MsgNotify::opcode;
-MsgNotify::MsgNotify(const hotstuff::Notify &notify) {serialized << notify;}
+MsgNotify::MsgNotify(const Notify &notify) {serialized << notify;}
 void MsgNotify::postponed_parse(HotStuffCore *hsc) {
     notify.hsc = hsc;
     serialized >> notify;
+}
+
+const opcode_t MsgPreCommit::opcode;
+MsgPreCommit::MsgPreCommit(const PreCommit &precommit) {serialized << precommit;}
+void MsgPreCommit::postponed_parse(HotStuffCore *hsc) {
+    precommit.hsc = hsc;
+    serialized >> precommit;
 }
 
 const opcode_t MsgNewView::opcode;
@@ -322,7 +329,7 @@ void HotStuffBase::blamenotify_handler(MsgBlameNotify &&msg, const Net::conn_t &
     });
 }
 
-void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_t &conn) {
+void HotStuffBase::new_view_handler(MsgNewView &&msg, const Net::conn_t &conn) {
     const NetAddr &peer = conn->get_peer_addr();
     if (peer.is_null()) return;
     msg.postponed_parse(this);
@@ -339,6 +346,35 @@ void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_
 
 }
 
+void HotStuffBase::precommit_handler(MsgPreCommit &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer_addr();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<PreCommit> p(new PreCommit(std::move(msg.precommit)));
+    promise::all(std::vector<promise_t>{
+            async_deliver_blk(p->blk_hash, peer)
+    }).then([this, p](const promise::values_t values) {
+        on_receive_precommit(*p);
+    });
+}
+
+void HotStuffBase::set_precommit_timer(const block_t &blk, double t_sec) {
+    auto height = blk->get_height();
+    auto &timer = precommit_timers[height] =
+                      TimerEvent(ec, [this, blk=std::move(blk), height](TimerEvent &) {
+                          on_precommit_timeout(blk);
+                          stop_precommit_timer(height);
+                      });
+    timer.add(t_sec);
+}
+
+void HotStuffBase::stop_precommit_timer(uint32_t height) {
+    precommit_timers.erase(height);
+}
+
+void HotStuffBase::stop_precommit_timer_all() {
+    precommit_timers.clear();
+}
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
 #ifdef SYNCHS_NOTIMER
@@ -402,7 +438,6 @@ void HotStuffBase::set_status_timer(double t_sec) {
 void HotStuffBase::stop_status_timer() {
     status_timer.clear();
 }
-
 
 void HotStuffBase::req_blk_handler(MsgReqBlock &&msg, const Net::conn_t &conn) {
     const NetAddr replica = conn->get_peer_addr();
@@ -553,6 +588,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::req_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::resp_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_view_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::precommit_handler, this, _1, _2));
     pn.reg_conn_handler(salticidae::generic_bind(&HotStuffBase::conn_handler, this, _1, _2));
     pn.start();
     pn.listen(listen_addr);

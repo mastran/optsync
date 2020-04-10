@@ -36,8 +36,7 @@ struct Blame;
 struct BlameNotify;
 struct Finality;
 struct Notify;
-
-
+struct PreCommit;
 
 
 /** Abstraction for HotStuff protocol state machine (without network implementation). */
@@ -89,6 +88,7 @@ class HotStuffCore {
     void on_status_complete();
     void _vote(const block_t &blk);
     void _notify(const block_t &blk, const quorum_cert_bt &qc);
+    void _precommit(const block_t &blk);
     void _blame(bool equiv=false);
     void _new_view();
 
@@ -131,6 +131,9 @@ class HotStuffCore {
     void on_receive_blame(const Blame &blame);
     void on_receive_blamenotify(const BlameNotify &blame);
     void on_receive_new_view(const Status &status);
+    void on_receive_precommit(const PreCommit &precommit);
+
+    void on_precommit_timeout(const block_t &blk);
     void on_commit_timeout(const block_t &blk);
     void on_blame_timeout();
     void on_viewtrans_timeout();
@@ -165,6 +168,7 @@ class HotStuffCore {
     virtual void do_broadcast_blamenotify(const BlameNotify &bn) = 0;
     virtual void do_status(const Status &status) = 0;
     virtual void do_broadcast_new_view(const Status &status)=0;
+    virtual void do_broadcast_precommit(const PreCommit &precommit) = 0;
 
     virtual void set_commit_timer(const block_t &blk, double t_sec) = 0;
     virtual void set_blame_timer(double t_sec) = 0;
@@ -176,6 +180,10 @@ class HotStuffCore {
     virtual void stop_viewtrans_timer() = 0;
 
     virtual void stop_status_timer() = 0;
+
+    virtual void set_precommit_timer(const block_t &blk, double t_sec) = 0;
+    virtual void stop_precommit_timer(uint32_t height) = 0;
+    virtual void stop_precommit_timer_all() = 0;
 
     /* The user plugs in the detailed instances for those
      * polymorphic data types. */
@@ -390,6 +398,60 @@ struct Notify: public Serializable {
     operator std::string () const {
         DataStream s;
         s << "<notify "
+          << "blk=" << get_hex10(blk_hash) << ">";
+        return std::move(s);
+    }
+};
+
+
+struct PreCommit: public Serializable {
+    ReplicaID replicaID;
+    uint256_t blk_hash;
+    uint32_t  view;
+
+    /** handle of the core object to allow polymorphism */
+    HotStuffCore *hsc;
+
+    PreCommit(): hsc(nullptr) {}
+    PreCommit(ReplicaID replicaID,
+           const uint256_t blk_hash,
+           const uint32_t view,
+           HotStuffCore *hsc):
+            replicaID(replicaID),
+            blk_hash(blk_hash),
+            view(view),
+            hsc(hsc) {}
+
+    PreCommit(const PreCommit &other):
+            replicaID(other.replicaID),
+            blk_hash(other.blk_hash),
+            view(other.view),
+            hsc(other.hsc) {}
+
+    PreCommit(PreCommit &&other) = default;
+
+    void serialize(DataStream &s) const override {
+        s << replicaID << blk_hash << view;
+    }
+
+    void unserialize(DataStream &s) override {
+        s >> replicaID >> blk_hash >> view;
+    }
+
+    bool verify() const {
+        assert(hsc != nullptr);
+        return true;
+    }
+
+    promise_t verify(VeriPool &vpool) const {
+        assert(hsc != nullptr);
+        promise_t pm;
+        return pm.then([this](bool result) { return true; });
+    }
+
+    operator std::string () const {
+        DataStream s;
+        s << "<precommit "
           << "blk=" << get_hex10(blk_hash) << ">";
         return std::move(s);
     }

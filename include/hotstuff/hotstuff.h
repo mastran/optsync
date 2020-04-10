@@ -95,6 +95,15 @@ struct MsgNotify {
     void postponed_parse(HotStuffCore *hsc);
 };
 
+struct MsgPreCommit {
+    static const opcode_t opcode = 0x9;
+    DataStream serialized;
+    PreCommit precommit;
+    MsgPreCommit(const PreCommit &);
+    MsgPreCommit(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
 struct MsgNewView {
     static const opcode_t opcode = 0x08;
     DataStream serialized;
@@ -189,6 +198,7 @@ class HotStuffBase: public HotStuffCore {
     VeriPool vpool;
     std::vector<NetAddr> peers;
     std::unordered_map<uint32_t, TimerEvent> commit_timers;
+    std::unordered_map<uint32_t, TimerEvent> precommit_timers;
     TimerEvent blame_timer;
     TimerEvent viewtrans_timer;
     TimerEvent status_timer;
@@ -262,6 +272,7 @@ class HotStuffBase: public HotStuffCore {
     inline void blamenotify_handler(MsgBlameNotify &&, const Net::conn_t &);
 
     inline void new_view_handler(MsgNewView &&, const Net::conn_t &);
+    inline void precommit_handler(MsgPreCommit &&, const Net::conn_t &);
 
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
@@ -303,6 +314,9 @@ class HotStuffBase: public HotStuffCore {
         _do_broadcast<Notify, MsgNotify>(notify);
     }
 
+    void do_broadcast_precommit(const PreCommit &preCommit) override {
+        _do_broadcast<PreCommit, MsgPreCommit>(preCommit);
+    }
 
     void do_broadcast_blame(const Blame &blame) override {
         _do_broadcast<Blame, MsgBlame>(blame);
@@ -329,6 +343,10 @@ class HotStuffBase: public HotStuffCore {
 
     void set_status_timer(double t_sec) override;
     void stop_status_timer() override;
+
+    void set_precommit_timer(const block_t &blk, double t_sec) override;
+    void stop_precommit_timer(uint32_t height) override;
+    void stop_precommit_timer_all() override;
 
     void do_decide(Finality &&) override;
     void do_consensus(const block_t &blk) override;
