@@ -1,4 +1,5 @@
-librightstuff
+OptSync
 -------------
 
-Work-in-progress: supports basic Sync HS (03/07/2019)
+Work-in-progress:
+Supports 2\Delta synchronous with simultaneous optimistic responsiveness (04/10/2020)
