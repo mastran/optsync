@@ -174,22 +174,38 @@ void HotStuffCore::_precommit(const hotstuff::block_t &blk) {
     do_broadcast_precommit(preCommit);
 }
 
+Blame HotStuffCore::get_blame(bool equiv) {
+    uint256_t hva_blk_hash;
+    quorum_cert_bt hva_qc;
+    if (hqc_ancestor.first && hqc_ancestor.first->view ==hqc.first->view){
+        hva_blk_hash = hqc_ancestor.first->get_hash();
+        hva_qc = hqc_ancestor.second->clone();
+    }
+
+    Blame blame(id, view,
+                create_part_cert(
+                        *priv_key,
+                        Blame::proof_obj_hash(view)),
+                equiv,
+                hqc.first->get_hash(),
+                hqc.second->clone(),
+                hva_blk_hash,
+                std::move(hva_qc),
+                this);
+
+    return blame;
+}
+
+
 // 4. Blame
 void HotStuffCore::_blame(bool equiv) {
     stop_blame_timer();
-    Blame blame(id, view,
-            create_part_cert(
-                *priv_key,
-                Blame::proof_obj_hash(view)), equiv, this);
+
+    Blame blame = get_blame(equiv);
+    blamed_view = view;
+
     on_receive_blame(blame);
     do_broadcast_blame(blame);
-
-    if(equiv){
-        view_trans = true;
-        stop_commit_timer_all();
-        stop_precommit_timer_all();
-        set_viewtrans_timer(2 * config.delta);
-    }
 }
 
 // i. New-view
@@ -197,20 +213,81 @@ void HotStuffCore::_new_view() {
     LOG_INFO("preparing new-view");
     if(view_trans) return;
 
-    blame_qc->compute();
-    BlameNotify bn(view,
-        hqc.first->get_hash(),
-        hqc.second->clone(),
-        blame_qc->clone(), this);
+    BlameNotify bn = get_blameNotify();
 
     view_trans = true;
     on_view_trans();
-    on_receive_blamenotify(bn);
     do_broadcast_blamenotify(bn);
 
     stop_commit_timer_all();
     stop_precommit_timer_all();
     set_viewtrans_timer(2 * config.delta);
+}
+
+void HotStuffCore::do_view_change() {
+    view++;
+    view_trans = false;
+    proposals.clear();
+    blame_qc = create_quorum_cert(Blame::proof_obj_hash(view));
+    blamed.clear();
+
+    // 4*\Delta wait in OptSync
+    set_blame_timer(4 * config.delta);
+    on_view_change(); // notify the PaceMaker of the view change
+    LOG_INFO("entering view %d", view);
+
+}
+
+BlameNotify HotStuffCore::get_blameNotify(bool is_responsive) {
+    blame_qc->compute();
+    uint256_t hva_hash;
+    quorum_cert_bt hva_qc;
+    if (hqc_ancestor.first) {
+        hva_hash = hqc_ancestor.first->get_hash();
+        hva_qc = hqc_ancestor.second->clone();
+    }
+
+    BlameNotify bn(view,
+                   hqc.first->get_hash(),
+                   hqc.second->clone(),
+                   blame_qc->clone(),
+                   hva_hash,
+                   hva_qc->clone(),
+                   is_responsive,
+                   this);
+
+    return bn;
+}
+
+Status HotStuffCore::get_status(){
+
+    uint256_t hva_hash;
+    quorum_cert_bt hva_qc;
+    if (hqc_ancestor.first != nullptr && hqc_ancestor.first->view ==hqc.first->view){
+        hva_hash = hqc_ancestor.first->get_hash();
+        hva_qc = hqc_ancestor.second->clone();
+    }
+
+    Status status(hqc.first->get_hash(), hqc.second->clone(), hva_hash, std::move(hva_qc), this, this->get_id());
+    return status;
+}
+
+void HotStuffCore::_responsive_new_view() {
+    LOG_INFO("performing responsive view-change");
+
+    BlameNotify bn = get_blameNotify(true);
+
+    do_view_change();
+
+    stop_commit_timer_all();
+    stop_precommit_timer_all();
+    // Stop view-change timer in the responsive case
+    stop_viewtrans_timer();
+    do_broadcast_blamenotify(bn);
+
+    //Send status immediately
+    Status status = get_status();
+    do_status(status);
 }
 
 // New View
@@ -436,11 +513,10 @@ void HotStuffCore::on_receive_status(const Status &status) {
 }
 
 void HotStuffCore::on_receive_blame(const Blame &blame) {
-    if (view_trans) return; // already in view transition
+    if (blame.view < view) return;
 
-    //Note: Nibesh: It doesn't check for which view, the blame is for. Could be blame message from previous views.
     size_t qsize = blamed.size();
-    if (qsize >= config.nmajority) return;
+    if (qsize >= config.nresponsive) return;
     if (!blamed.insert(blame.blamer).second)
     {
         LOG_WARN("duplicate blame from %d", blame.blamer);
@@ -449,14 +525,38 @@ void HotStuffCore::on_receive_blame(const Blame &blame) {
 
     assert(blame_qc);
     blame_qc->add_part(blame.blamer, *blame.cert);
-    if (++qsize == config.nmajority) {
-        _new_view();
-    } else if(blame.equiv){
+    qsize++;
+
+    if (blame.blamer != id) {
+        block_t blk = get_delivered_blk(blame.hqc_hash);
+        block_t hva_blk;
+        quorum_cert_bt hva_qc;
+
+        if (!blame.hva_hash.is_null()) {
+            hva_blk = get_delivered_blk(blame.hva_hash);
+            hva_qc = blame.hva_qc->clone();
+        }
+
+        update_hqc(blk, blame.hqc_qc, hva_blk, hva_qc);
+    }
+
+    if (qsize == config.nresponsive){
+        _responsive_new_view();
+    } else if(!view_trans && blame.equiv){
         view_trans = true;
         stop_commit_timer_all();
         stop_precommit_timer_all();
         set_viewtrans_timer(2 * config.delta);
+
+        if(blamed_view < view) {
+            blamed_view = view;
+            do_broadcast_blame(get_blame(blame.equiv));
+        }
+    } else if(!view_trans && qsize == config.nmajority){
+        _new_view();
     }
+
+
 }
 
 void HotStuffCore::on_receive_blamenotify(const BlameNotify &bn) {
@@ -474,8 +574,6 @@ void HotStuffCore::on_receive_new_view(const Status &status) {
     if (!status.responsive_ancestor_blk_hash.is_null()){
         hva_blk = get_delivered_blk(status.responsive_ancestor_blk_hash);
     }
-
-    //assert(hva_blk == nullptr || hva_blk->view == blk->view);
 
     bool opinion = update_hqc(blk, status.hqc, hva_blk, status.responsive_ancestor_qc);
 
@@ -519,14 +617,7 @@ void HotStuffCore::on_viewtrans_timeout() {
     LOG_INFO("entering view %d", view);
 
     // send the highest certified block and its highest-view-v-ancestor
-    uint256_t hva_blk_hash;
-    quorum_cert_bt hva_blk_qc;
-    if (hqc_ancestor.first != nullptr && hqc_ancestor.first->view ==hqc.first->view){
-        hva_blk_hash = hqc_ancestor.first->get_hash();
-        hva_blk_qc = hqc_ancestor.second->clone();
-    }
-
-    Status status(hqc.first->get_hash(), hqc.second->clone(), hva_blk_hash, std::move(hva_blk_qc), this, this->get_id());
+    Status status = get_status();
     do_status(status);
 }
 

@@ -59,6 +59,10 @@ class HotStuffCore {
     quorum_cert_bt blame_qc;
     std::unordered_set<ReplicaID> blamed;
 
+    uint32_t blamed_view;   // Track whether blame message sent in the view.
+    quorum_cert_bt status_qc;
+    std::unordered_set<ReplicaID> status_received;
+
     /* === auxilliary variables === */
     privkey_bt priv_key;            /**< private key for signing votes */
     std::set<block_t, BlockHeightCmp> tails;   /**< set of tail blocks */
@@ -91,6 +95,12 @@ class HotStuffCore {
     void _precommit(const block_t &blk);
     void _blame(bool equiv=false);
     void _new_view();
+    void _responsive_new_view();
+
+    void do_view_change();
+    Blame get_blame(bool equiv = false);
+    BlameNotify get_blameNotify(bool is_responsive=false);
+    Status get_status();
 
     protected:
     ReplicaID id;                  /**< identity of the replica itself */
@@ -286,7 +296,7 @@ struct Vote: public Serializable {
     uint256_t blk_hash;
     /** proof of validity for the vote */
     part_cert_bt cert;
-    
+
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
 
@@ -306,7 +316,7 @@ struct Vote: public Serializable {
         hsc(other.hsc) {}
 
     Vote(Vote &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
         s << voter << blk_hash << *cert;
     }
@@ -460,8 +470,8 @@ struct PreCommit: public Serializable {
 
 struct Status: public Serializable {
     uint256_t hqc_blk_hash;
-
     quorum_cert_bt hqc;
+
     uint256_t responsive_ancestor_blk_hash; // highest-view-v-responsive ancestor
 
     quorum_cert_bt responsive_ancestor_qc;
@@ -490,7 +500,7 @@ struct Status: public Serializable {
             hsc(other.hsc), sender(other.sender) {}
 
     Status(Status &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
         s << hqc_blk_hash << *hqc << responsive_ancestor_blk_hash << *responsive_ancestor_qc;
     }
@@ -531,38 +541,58 @@ struct Blame: public Serializable {
 
     // A quick hack to indicate blame due to equivocation. Setting this flag makes a replica quit view immediately!
     bool equiv;
-    
+
+    uint256_t hqc_hash; // highest ranked block hash
+    quorum_cert_bt hqc_qc; // highest ranked quorum certificate
+    uint256_t hva_hash; // highest view v ancestor
+    quorum_cert_bt hva_qc; //  Quorum certificate for hva_blk
+
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
 
-    Blame(): cert(nullptr), equiv(false), hsc(nullptr) {}
+    Blame(): cert(nullptr), equiv(false), hqc_qc(nullptr), hva_qc(nullptr), hsc(nullptr) {}
     Blame(ReplicaID blamer,
         uint32_t view,
         part_cert_bt &&cert,
         bool equiv,
+        const uint256_t hqc_hash,
+        quorum_cert_bt hqc_qc,
+        const uint256_t hva_hash,
+        quorum_cert_bt hva_qc,
         HotStuffCore *hsc):
         blamer(blamer),
         view(view),
         cert(std::move(cert)),
-        equiv(equiv), hsc(hsc) {}
+        equiv(equiv),
+        hqc_hash(hqc_hash),
+        hqc_qc(std::move(hqc_qc)),
+        hva_hash(hva_hash),
+        hva_qc(std::move(hva_qc)),
+        hsc(hsc) {}
 
     Blame(const Blame &other):
         blamer(other.blamer),
         view(other.view),
         cert(other.cert ? other.cert->clone() : nullptr),
         equiv(other.equiv),
+        hqc_hash(other.hqc_hash),
+        hqc_qc(other.hqc_qc ? other.hqc_qc->clone(): nullptr),
+        hva_hash(other.hva_hash),
+        hva_qc(other.hva_qc? other.hva_qc->clone(): nullptr),
         hsc(other.hsc) {}
 
     Blame(Blame &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
-        s << blamer << view << equiv <<*cert;
+        s << blamer << view << equiv << hqc_hash << hva_hash << *cert << *hqc_qc << *hva_qc;
     }
 
     void unserialize(DataStream &s) override {
         assert(hsc != nullptr);
-        s >> blamer >> view >> equiv;
+        s >> blamer >> view >> equiv >> hqc_hash >> hva_hash;
         cert = hsc->parse_part_cert(s);
+        hqc_qc = hsc->parse_quorum_cert(s);
+        hva_qc = hsc->parse_quorum_cert(s);
     }
 
     static uint256_t proof_obj_hash(uint32_t view) {
@@ -598,37 +628,56 @@ struct BlameNotify: public Serializable {
     uint256_t hqc_hash;
     quorum_cert_bt hqc_qc;
     quorum_cert_bt qc;
-    
+
+    uint256_t hva_hash;
+    quorum_cert_bt hva_qc;
+
+    bool is_responsive;
+
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
 
-    BlameNotify(): hqc_qc(nullptr), qc(nullptr), hsc(nullptr) {}
+    BlameNotify(): hqc_qc(nullptr), qc(nullptr), is_responsive(false), hsc(nullptr) {}
     BlameNotify(uint32_t view,
                 const uint256_t &hqc_hash,
                 quorum_cert_bt &&hqc_qc,
                 quorum_cert_bt &&qc,
+                const uint256_t  &hva_hash,
+                quorum_cert_bt &&hva_qc,
+                bool is_responsive,
                 HotStuffCore *hsc):
         view(view),
         hqc_hash(hqc_hash),
         hqc_qc(std::move(hqc_qc)),
-        qc(std::move(qc)), hsc(hsc) {}
+        qc(std::move(qc)),
+        hva_hash(hva_hash),
+        hva_qc(std::move(hva_qc)),
+        is_responsive(is_responsive),
+        hsc(hsc) {}
 
     BlameNotify(const BlameNotify &other):
         view(other.view),
         hqc_hash(other.hqc_hash),
         hqc_qc(other.hqc_qc ? other.hqc_qc->clone() : nullptr),
-        qc(other.qc ? other.qc->clone() : nullptr), hsc(other.hsc) {}
+        qc(other.qc ? other.qc->clone() : nullptr),
+        hva_hash(other.hva_hash),
+        hva_qc(other.hva_qc ? other.hva_qc->clone(): nullptr),
+        is_responsive(other.is_responsive),
+        hsc(other.hsc) {}
 
     BlameNotify(BlameNotify &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
-        s << view << hqc_hash << *hqc_qc << *qc;
+        s << view << hqc_hash << *hqc_qc << *qc << hva_hash << *hva_qc << is_responsive;
     }
 
     void unserialize(DataStream &s) override {
         s >> view >> hqc_hash;
         hqc_qc = hsc->parse_quorum_cert(s);
         qc = hsc->parse_quorum_cert(s);
+        s >> hva_hash;
+        hva_qc = hsc->parse_quorum_cert(s);
+        s >> is_responsive;
     }
 
     bool verify() const {
@@ -655,7 +704,8 @@ struct BlameNotify: public Serializable {
     operator std::string () const {
         DataStream s;
         s << "<blame notify "
-          << "view=" << std::to_string(view) << ">";
+          << "view=" << std::to_string(view) << " "
+          << "type" << (is_responsive ? "resp": "sync") << ">";
         return std::move(s);
     }
 };
@@ -675,7 +725,7 @@ struct Finality: public Serializable {
     uint32_t cmd_height;
     uint256_t cmd_hash;
     uint256_t blk_hash;
-    
+
     public:
     Finality() = default;
     Finality(ReplicaID rid,
