@@ -130,6 +130,8 @@ void HotStuffCore::check_commit(const block_t &blk) {
     for (auto it = commit_queue.rbegin(); it != commit_queue.rend(); it++)
     {
         const block_t &blk = *it;
+        if(blk->decision == 1)
+            continue;
         blk->decision = 1;
         do_consensus(blk);
         LOG_PROTO("commit %s", std::string(*blk).c_str());
@@ -274,7 +276,7 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     if (view_trans) return;
     LOG_PROTO("got %s", std::string(prop).c_str());
 
-    reset_blame_timer(2*config.delta);
+//    reset_blame_timer(2*config.delta);
 
     block_t bnew = prop.blk;
     if (finished_propose[bnew]) return;
@@ -333,7 +335,6 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
     size_t qsize = blk->voted.size();
 
     if (qsize >= config.nresponsive) return;
-//    if (qsize >= config.nmajority) return;
 
     if (!blk->voted.insert(vote.voter).second)
     {
@@ -352,14 +353,14 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         blk->cert_type = SYNCHRONOUS_CERT;
         qc->compute();
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
-        // Start proposing new blocks
+//         Start proposing new blocks
         on_qc_finish(blk);
 
     }
     else if(qsize == config.nresponsive){
         blk->cert_type = RESPONSIVE_CERT;
         qc->compute();
-
+//        on_qc_finish(blk);
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
         stop_commit_timer(blk->height);
         check_commit(blk);
@@ -369,6 +370,13 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
 
 void HotStuffCore::on_receive_notify(const Notify &notify) {
     block_t blk = get_delivered_blk(notify.blk_hash);
+
+    stop_commit_timer(blk->height);
+    // Already committed
+    if(blk->decision == 1) {
+        return;
+    }
+
     LOG_PROTO("got notify blk=%s", std::string(*blk).c_str());
 
     if (!finished_propose[blk])
@@ -384,6 +392,7 @@ void HotStuffCore::on_receive_notify(const Notify &notify) {
 
     update_hqc(blk, notify.qc, hqc_ancestor.first, hqc_ancestor.second);
     if (!view_trans) check_commit(blk);
+
 }
 
 void HotStuffCore::on_receive_status(const Status &status) {
@@ -469,8 +478,8 @@ void HotStuffCore::on_viewtrans_timeout() {
     blame_qc = create_quorum_cert(Blame::proof_obj_hash(view));
     blamed.clear();
 
-    // 4*\Delta wait in OptSync
-    set_blame_timer(4 * config.delta);
+    // 6*\Delta wait for the first block.
+    set_blame_timer(6 * config.delta);
     on_view_change(); // notify the PaceMaker of the view change
     LOG_INFO("entering view %d", view);
 
