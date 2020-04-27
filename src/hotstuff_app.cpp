@@ -142,7 +142,7 @@ class HotStuffApp: public HotStuff {
                 const Net::Config &repnet_config,
                 const ClientNetwork<opcode_t>::Config &clinet_config);
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps);
+    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta);
     void stop();
 };
 
@@ -171,13 +171,15 @@ int main(int argc, char **argv) {
     auto opt_help = Config::OptValFlag::create(false);
     auto opt_pace_maker = Config::OptValStr::create("dummy");
     auto opt_fixed_proposer = Config::OptValInt::create(1);
-    auto opt_qc_timeout = Config::OptValDouble::create(0.5);
+    auto opt_base_timeout = Config::OptValDouble::create(1);
+    auto opt_prop_delay = Config::OptValDouble::create(1);
     auto opt_imp_timeout = Config::OptValDouble::create(11);
     auto opt_nworker = Config::OptValInt::create(1);
     auto opt_repnworker = Config::OptValInt::create(1);
     auto opt_repburst = Config::OptValInt::create(100);
     auto opt_clinworker = Config::OptValInt::create(8);
     auto opt_cliburst = Config::OptValInt::create(1000);
+    auto opt_delta = Config::OptValDouble::create(1);
 
     config.add_opt("block-size", opt_blk_size, Config::SET_VAL);
     config.add_opt("parent-limit", opt_parent_limit, Config::SET_VAL);
@@ -188,13 +190,15 @@ int main(int argc, char **argv) {
     config.add_opt("privkey", opt_privkey, Config::SET_VAL);
     config.add_opt("pace-maker", opt_pace_maker, Config::SET_VAL, 'p', "specify pace maker (sticky, dummy)");
     config.add_opt("proposer", opt_fixed_proposer, Config::SET_VAL, 'l', "set the fixed proposer (for dummy)");
-    config.add_opt("qc-timeout", opt_qc_timeout, Config::SET_VAL, 't', "set QC timeout (for sticky)");
+    config.add_opt("base-timeout", opt_base_timeout, Config::SET_VAL, 't', "set the initial timeout for the Round-Robin Pacemaker");
+    config.add_opt("prop-delay", opt_prop_delay, Config::SET_VAL, 't', "set the delay that follows the timeout for the Round-Robin Pacemaker");
     config.add_opt("imp-timeout", opt_imp_timeout, Config::SET_VAL, 'u', "set impeachment timeout (for sticky)");
     config.add_opt("nworker", opt_nworker, Config::SET_VAL, 'n', "the number of threads for verification");
     config.add_opt("repnworker", opt_repnworker, Config::SET_VAL, 'm', "the number of threads for replica network");
     config.add_opt("repburst", opt_repburst, Config::SET_VAL, 'b', "");
     config.add_opt("clinworker", opt_clinworker, Config::SET_VAL, 'M', "the number of threads for client network");
     config.add_opt("cliburst", opt_cliburst, Config::SET_VAL, 'B', "");
+    config.add_opt("delta", opt_delta, Config::SET_VAL, 'd', "maximum network delay");
     config.add_opt("help", opt_help, Config::SWITCH_ON, 'h', "show this help info");
 
     EventContext ec;
@@ -233,10 +237,8 @@ int main(int argc, char **argv) {
 
     auto parent_limit = opt_parent_limit->get();
     hotstuff::pacemaker_bt pmaker;
-    if (opt_pace_maker->get() == "sticky")
-        pmaker = new hotstuff::PaceMakerSticky(parent_limit, opt_qc_timeout->get(), ec);
-    else if (opt_pace_maker->get() == "rr")
-        pmaker = new hotstuff::PaceMakerRR(parent_limit, opt_qc_timeout->get(), ec);
+    if (opt_pace_maker->get() == "rr")
+        pmaker = new hotstuff::PaceMakerRR(parent_limit, opt_base_timeout->get(), ec);
     else
         pmaker = new hotstuff::PaceMakerDummyFixed(opt_fixed_proposer->get(), parent_limit);
 
@@ -273,7 +275,7 @@ int main(int argc, char **argv) {
     ev_sigint.add(SIGINT);
     ev_sigterm.add(SIGTERM);
 
-    papp->start(reps);
+    papp->start(reps, opt_delta->get());
     elapsed.stop(true);
     return 0;
 }
@@ -340,7 +342,7 @@ void HotStuffApp::client_request_cmd_handler(MsgReqCmd &&msg, const conn_t &conn
     });
 }
 
-void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps) {
+void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta) {
     ev_stat_timer = TimerEvent(ec, [this](TimerEvent &) {
         HotStuff::print_stat();
         HotStuffApp::print_stat();
@@ -349,15 +351,15 @@ void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps
     });
     ev_stat_timer.add(stat_period);
     impeach_timer = TimerEvent(ec, [this](TimerEvent &) {
-        get_pace_maker().impeach();
-        reset_imp_timer();
+//        get_pace_maker().impeach();
+//        reset_imp_timer();
     });
     impeach_timer.add(impeach_timeout);
     HOTSTUFF_LOG_INFO("** starting the system with parameters **");
     HOTSTUFF_LOG_INFO("blk_size = %lu", blk_size);
     HOTSTUFF_LOG_INFO("conns = %lu", HotStuff::size());
     HOTSTUFF_LOG_INFO("** starting the event loop...");
-    HotStuff::start(reps);
+    HotStuff::start(reps, delta);
     cn.reg_conn_handler([this](const salticidae::ConnPool::conn_t &_conn, bool connected) {
         auto conn = salticidae::static_pointer_cast<conn_t::type>(_conn);
         if (connected)

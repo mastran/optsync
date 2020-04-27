@@ -109,9 +109,9 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
     elapsed.push_back(std::make_pair(tv, et.elapsed_sec));
 #endif
     waiting.erase(it);
-#ifndef HOTSTUFF_AUTOCLI
+
     while (try_send());
-#endif
+
 }
 
 //#ifdef HOTSTUFF_AUTOCLI
@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
         replicas.push_back(NetAddr(NetAddr(_p.first).ip, htons(stoi(_p.second, &_))));
     }
 
-    nfaulty = (replicas.size() - 1) / 3;
+    nfaulty = (replicas.size() - 1) / 2;
     HOTSTUFF_LOG_INFO("nfaulty = %zu", nfaulty);
     connect_all();
     while (try_send());

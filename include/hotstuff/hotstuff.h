@@ -60,6 +60,51 @@ struct MsgVote {
     void postponed_parse(HotStuffCore *hsc);
 };
 
+struct MsgStatus {
+    static const opcode_t opcode = 0x4;
+    DataStream serialized;
+    Status status;
+    MsgStatus(const Status &);
+    MsgStatus(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgBlame {
+    static const opcode_t opcode = 0x5;
+    DataStream serialized;
+    Blame blame;
+    MsgBlame(const Blame &);
+    MsgBlame(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgBlameNotify {
+    static const opcode_t opcode = 0x6;
+    DataStream serialized;
+    BlameNotify bn;
+    MsgBlameNotify(const BlameNotify &);
+    MsgBlameNotify(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgNotify {
+    static const opcode_t opcode = 0x7;
+    DataStream serialized;
+    Notify notify;
+    MsgNotify(const Notify &);
+    MsgNotify(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgNewView {
+    static const opcode_t opcode = 0x08;
+    DataStream serialized;
+    Status status;
+    MsgNewView(const Status &);
+    MsgNewView(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
 struct MsgReqBlock {
     static const opcode_t opcode = 0x2;
     DataStream serialized;
@@ -140,8 +185,13 @@ class HotStuffBase: public HotStuffCore {
     size_t blk_size;
     /** libevent handle */
     EventContext ec;
+    salticidae::ThreadCall tcall;
     VeriPool vpool;
     std::vector<NetAddr> peers;
+    std::unordered_map<uint32_t, TimerEvent> commit_timers;
+    TimerEvent blame_timer;
+    TimerEvent viewtrans_timer;
+    TimerEvent status_timer;
 
     private:
     /** whether libevent handle is owned by itself */
@@ -184,14 +234,81 @@ class HotStuffBase: public HotStuffCore {
     inline void propose_handler(MsgPropose &&, const Net::conn_t &);
     /** deliver consensus message: <vote> */
     inline void vote_handler(MsgVote &&, const Net::conn_t &);
+    inline void notify_handler(MsgNotify &&, const Net::conn_t &);
+    inline void status_handler(MsgStatus &&, const Net::conn_t &);
+    inline void blame_handler(MsgBlame &&, const Net::conn_t &);
+    inline void blamenotify_handler(MsgBlameNotify &&, const Net::conn_t &);
+
+    inline void new_view_handler(MsgNewView &&, const Net::conn_t &);
+
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
     /** receives a block */
     inline void resp_blk_handler(MsgRespBlock &&, const Net::conn_t &);
 
-    void do_broadcast_proposal(const Proposal &) override;
-    void do_vote(ReplicaID, const Vote &) override;
+    template<typename T, typename M>
+    void _do_broadcast(const T &t) {
+        //M m(t);
+        pn.multicast_msg(M(t), peers);
+        //for (const auto &replica: peers)
+        //    pn.send_msg(m, replica);
+    }
+
+    void do_broadcast_proposal(const Proposal&) override;
+
+
+
+        void do_broadcast_vote(const Vote &vote) override {
+#ifdef SYNCHS_NOVOTEBROADCAST
+        pmaker->beat_resp(0)
+                .then([this, vote](ReplicaID proposer) {
+            if (proposer == get_id())
+            {
+                throw HotStuffError("unreachable line");
+                //on_receive_vote(vote);
+            }
+            else
+                pn.send_msg(MsgVote(vote), get_config().get_addr(proposer));
+        });
+#else
+        _do_broadcast<Vote, MsgVote>(vote);
+#endif
+
+    }
+
+    void do_broadcast_notify(const Notify &notify) override {
+        _do_broadcast<Notify, MsgNotify>(notify);
+    }
+
+
+    void do_broadcast_blame(const Blame &blame) override {
+        _do_broadcast<Blame, MsgBlame>(blame);
+    }
+
+    void do_broadcast_blamenotify(const BlameNotify &bn) override {
+        _do_broadcast<BlameNotify, MsgBlameNotify>(bn);
+    }
+
+    void do_broadcast_new_view(const Status &status) override {
+        _do_broadcast<Status, MsgNewView>(status);
+    }
+
+    void do_status(const Status &status) override;
+
+    void set_commit_timer(const block_t &blk, double t_sec) override;
+    void stop_commit_timer(uint32_t height) override;
+    void stop_commit_timer_all() override;
+    void set_blame_timer(double t_sec) override;
+    void stop_blame_timer() override;
+    void reset_blame_timer(double t_sec) override;
+    void set_viewtrans_timer(double t_sec) override;
+    void stop_viewtrans_timer() override;
+
+    void set_status_timer(double t_sec) override;
+    void stop_status_timer() override;
+
     void do_decide(Finality &&) override;
+    void do_consensus(const block_t &blk) override;
 
     protected:
 
@@ -215,13 +332,16 @@ class HotStuffBase: public HotStuffCore {
 
     /* Submit the command to be decided. */
     void exec_command(uint256_t cmd_hash, commit_cb_t callback);
-    void start(std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas, bool ec_loop = false);
+    void start(std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas,double delta, bool ec_loop = false);
 
     size_t size() const { return peers.size(); }
-    PaceMaker &get_pace_maker() { return *pmaker; }
+    const auto &get_decision_waiting() const { return decision_waiting; }
+    ThreadCall &get_tcall() { return tcall; }
+    PaceMaker *get_pace_maker() { return pmaker.get(); }
     void print_stat() const;
-//#ifdef HOTSTUFF_AUTOCLI
-//    virtual void do_demand_commands(size_t) {}
+    virtual void do_elected() {}
+//#ifdef SYNCHS_AUTOCLI
+ //   virtual void do_demand_commands(size_t) {}
 //#endif
 
     /* Helper functions */
@@ -284,11 +404,11 @@ class HotStuff: public HotStuffBase {
                     nworker,
                     netconfig) {}
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &replicas, bool ec_loop = false) {
+    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &replicas, double delta, bool ec_loop = false) {
         std::vector<std::pair<NetAddr, pubkey_bt>> reps;
         for (auto &r: replicas)
             reps.push_back(std::make_pair(r.first, new PubKeyType(r.second)));
-        HotStuffBase::start(std::move(reps), ec_loop);
+        HotStuffBase::start(std::move(reps), delta, ec_loop);
     }
 };
 

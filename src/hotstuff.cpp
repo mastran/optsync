@@ -40,6 +40,41 @@ void MsgVote::postponed_parse(HotStuffCore *hsc) {
     serialized >> vote;
 }
 
+const opcode_t MsgStatus::opcode;
+MsgStatus::MsgStatus(const Status &status) { serialized << status; }
+void MsgStatus::postponed_parse(HotStuffCore *hsc) {
+    status.hsc = hsc;
+    serialized >> status;
+}
+
+const opcode_t MsgBlame::opcode;
+MsgBlame::MsgBlame(const Blame &blame) { serialized << blame; }
+void MsgBlame::postponed_parse(HotStuffCore *hsc) {
+    blame.hsc = hsc;
+    serialized >> blame;
+}
+
+const opcode_t MsgBlameNotify::opcode;
+MsgBlameNotify::MsgBlameNotify(const BlameNotify &bn) { serialized << bn; }
+void MsgBlameNotify::postponed_parse(HotStuffCore *hsc) {
+    bn.hsc = hsc;
+    serialized >> bn;
+}
+
+const opcode_t MsgNotify::opcode;
+MsgNotify::MsgNotify(const hotstuff::Notify &notify) {serialized << notify;}
+void MsgNotify::postponed_parse(HotStuffCore *hsc) {
+    notify.hsc = hsc;
+    serialized >> notify;
+}
+
+const opcode_t MsgNewView::opcode;
+MsgNewView::MsgNewView(const Status &status) { serialized << status; }
+void MsgNewView::postponed_parse(HotStuffCore *hsc) {
+    status.hsc = hsc;
+    serialized >> status;
+}
+
 const opcode_t MsgReqBlock::opcode;
 MsgReqBlock::MsgReqBlock(const std::vector<uint256_t> &blk_hashes) {
     serialized << htole((uint32_t)blk_hashes.size());
@@ -178,7 +213,7 @@ promise_t HotStuffBase::async_deliver_blk(const uint256_t &blk_hash,
         std::vector<promise_t> pms;
         const auto &qc = blk->get_qc();
         if (qc)
-            pms.push_back(async_fetch_blk(qc->get_obj_hash(), &replica_id));
+            pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
         /* the parents should be delivered */
         for (const auto &phash: blk->get_parent_hashes())
             pms.push_back(async_deliver_blk(phash, replica_id));
@@ -197,6 +232,7 @@ void HotStuffBase::propose_handler(MsgPropose &&msg, const Net::conn_t &conn) {
     auto &prop = msg.proposal;
     block_t blk = prop.blk;
     if (!blk) return;
+
     promise::all(std::vector<promise_t>{
         async_deliver_blk(blk->get_hash(), peer)
     }).then([this, prop = std::move(prop)]() {
@@ -219,6 +255,152 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
             on_receive_vote(*v);
     });
 }
+
+void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
+    const NetAddr &peer = conn->get_peer();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+
+    RcObj<Notify> n(new Notify(std::move(msg.notify)));
+    promise::all(std::vector<promise_t>{
+            async_deliver_blk(n->blk_hash, peer),
+            n->verify(vpool),
+    }).then([this, n](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid notify from %d", n->notifier);
+        else
+            on_receive_notify(*n);
+    });
+
+}
+
+void HotStuffBase::status_handler(MsgStatus &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<Status> s(new Status(std::move(msg.status)));
+    promise::all(std::vector<promise_t>{
+        async_deliver_blk(s->hqc_blk_hash, peer),
+        s->verify(vpool)
+    }).then([this, s, peer](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid status message from %s", std::string(peer).c_str());
+        else
+            on_receive_status(*s);
+    });
+}
+
+void HotStuffBase::blame_handler(MsgBlame &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<Blame> b(new Blame(std::move(msg.blame)));
+    b->verify(vpool).then([this, b, peer](bool result) {
+        if (!result)
+            LOG_WARN("invalid blame message from %s", std::string(peer).c_str());
+        else
+            on_receive_blame(*b);
+    });
+}
+
+void HotStuffBase::blamenotify_handler(MsgBlameNotify &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<BlameNotify> bn(new BlameNotify(std::move(msg.bn)));
+    promise::all(std::vector<promise_t>{
+        async_deliver_blk(bn->hqc_hash, peer),
+        bn->verify(vpool)
+    }).then([this, bn, peer](promise::values_t values) {
+        auto result = promise::any_cast<bool>(values[1]);
+        if (!result)
+            LOG_WARN("invalid blamenotify message from %s", std::string(peer).c_str());
+        else
+            on_receive_blamenotify(*bn);
+    });
+}
+
+void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    if (peer.is_null()) return;
+    msg.postponed_parse(this);
+    RcObj<Status> s(new Status(std::move(msg.status)));
+    promise::all(std::vector<promise_t>{
+            async_deliver_blk(s->hqc_blk_hash, peer),
+            s->verify(vpool)
+    }).then([this, s, peer](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid status message from %s", std::string(peer).c_str());
+        else
+            on_receive_new_view(*s);
+    });
+
+}
+
+
+void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
+#ifdef SYNCHS_NOTIMER
+    on_commit_timeout(blk);
+#else
+    auto height = blk->get_height();
+    auto &timer = commit_timers[height] =
+        TimerEvent(ec, [this, blk=std::move(blk), height](TimerEvent &) {
+            on_commit_timeout(blk);
+            stop_commit_timer(height);
+        });
+    timer.add(t_sec);
+#endif
+}
+
+void HotStuffBase::stop_commit_timer(uint32_t height) {
+    commit_timers.erase(height);
+}
+
+void HotStuffBase::stop_commit_timer_all() {
+    commit_timers.clear();
+}
+
+void HotStuffBase::set_blame_timer(double t_sec) {
+    blame_timer = TimerEvent(ec, [this](TimerEvent &) {
+        on_blame_timeout();
+        stop_blame_timer();
+    });
+    blame_timer.add(t_sec);
+}
+
+void HotStuffBase::stop_blame_timer() {
+    blame_timer.clear();
+}
+
+void HotStuffBase::reset_blame_timer(double t_sec){
+    stop_blame_timer();
+    set_blame_timer(t_sec);
+}
+
+void HotStuffBase::set_viewtrans_timer(double t_sec) {
+    viewtrans_timer = TimerEvent(ec, [this](TimerEvent &) {
+        on_viewtrans_timeout();
+        stop_viewtrans_timer();
+    });
+    viewtrans_timer.add(t_sec);
+}
+
+void HotStuffBase::stop_viewtrans_timer() {
+    viewtrans_timer.clear();
+}
+
+void HotStuffBase::set_status_timer(double t_sec) {
+    status_timer = TimerEvent(ec, [this](TimerEvent &){
+        on_status_timeout();
+        stop_status_timer();
+    });
+    status_timer.add(t_sec);
+}
+
+void HotStuffBase::stop_status_timer() {
+    status_timer.clear();
+}
+
 
 void HotStuffBase::req_blk_handler(MsgReqBlock &&msg, const Net::conn_t &conn) {
     const NetAddr replica = conn->get_peer();
@@ -249,6 +431,7 @@ void HotStuffBase::print_stat() const {
     LOG_INFO("blk_fetch_waiting: %lu", blk_fetch_waiting.size());
     LOG_INFO("blk_delivery_waiting: %lu", blk_delivery_waiting.size());
     LOG_INFO("decision_waiting: %lu", decision_waiting.size());
+    LOG_INFO("commit_timers: %lu", commit_timers.size());
     LOG_INFO("-------- misc ---------");
     LOG_INFO("fetched: %lu", fetched);
     LOG_INFO("delivered: %lu", delivered);
@@ -316,6 +499,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
         listen_addr(listen_addr),
         blk_size(blk_size),
         ec(ec),
+        tcall(ec),
         vpool(ec, nworker),
         pn(ec, netconfig),
         pmaker(std::move(pmaker)),
@@ -334,10 +518,19 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     /* register the handlers for msg from replicas */
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::propose_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::vote_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::notify_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::status_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::blame_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::blamenotify_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::req_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::resp_blk_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_view_handler, this, _1, _2));
     pn.start();
     pn.listen(listen_addr);
+}
+
+void HotStuffBase::do_consensus(const block_t &blk){
+    pmaker->on_consensus(blk);
 }
 
 void HotStuffBase::do_broadcast_proposal(const Proposal &prop) {
@@ -347,18 +540,6 @@ void HotStuffBase::do_broadcast_proposal(const Proposal &prop) {
     //    pn.send_msg(prop_msg, replica);
 }
 
-void HotStuffBase::do_vote(ReplicaID last_proposer, const Vote &vote) {
-    pmaker->beat_resp(last_proposer)
-            .then([this, vote](ReplicaID proposer) {
-        if (proposer == get_id())
-        {
-            throw HotStuffError("unreachable line");
-            //on_receive_vote(vote);
-        }
-        else
-            pn.send_msg(MsgVote(vote), get_config().get_addr(proposer));
-    });
-}
 
 void HotStuffBase::do_decide(Finality &&fin) {
     part_decided++;
@@ -371,11 +552,22 @@ void HotStuffBase::do_decide(Finality &&fin) {
     }
 }
 
+void HotStuffBase::do_status(const Status &status) {
+    MsgStatus m(status);
+    ReplicaID next_proposer = pmaker->get_proposer();
+
+//    LOG_INFO("Sending status: %d, %s", next_proposer, std::string(status).c_str());
+    if (next_proposer != get_id())
+        pn.send_msg(m, get_config().get_addr(next_proposer));
+    else
+        on_receive_status(status);
+}
+
 HotStuffBase::~HotStuffBase() {}
 
 void HotStuffBase::start(
         std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas,
-        bool ec_loop) {
+        double delta, bool ec_loop) {
     for (size_t i = 0; i < replicas.size(); i++)
     {
         auto &addr = replicas[i].first;
@@ -388,10 +580,10 @@ void HotStuffBase::start(
     }
 
     /* ((n - 1) + 1 - 1) / 3 */
-    uint32_t nfaulty = peers.size() / 3;
+    uint32_t nfaulty = peers.size() / 2;
     if (nfaulty == 0)
         LOG_WARN("too few replicas in the system to tolerate any failure");
-    on_init(nfaulty);
+    on_init(nfaulty, delta);
     pmaker->init(this);
     if (ec_loop)
         ec.dispatch();
@@ -415,7 +607,6 @@ void HotStuffBase::start(
             {
                 // TODO: duplicate commands
             }
-
             if (cmd_pending_buffer.size() >= blk_size)
             {
                 std::vector<uint256_t> cmds;
@@ -425,6 +616,7 @@ void HotStuffBase::start(
                     cmd_pending_buffer.pop();
                 }
                 pmaker->beat().then([this, cmds = std::move(cmds)](ReplicaID proposer) {
+
                     if (proposer == get_id())
                         on_propose(cmds, pmaker->get_parents());
                 });

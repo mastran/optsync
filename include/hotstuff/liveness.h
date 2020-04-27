@@ -19,7 +19,8 @@
 #define _HOTSTUFF_LIVENESS_H
 
 #include "salticidae/util.h"
-#include "hotstuff/consensus.h"
+#include "hotstuff/hotstuff.h"
+
 
 namespace hotstuff {
 
@@ -51,31 +52,31 @@ class PaceMaker {
     virtual promise_t beat_resp(ReplicaID last_proposer) = 0;
     /** Impeach the current proposer. */
     virtual void impeach() {}
+    virtual void on_consensus(const block_t &) {}
     virtual size_t get_pending_size() = 0;
 };
 
 using pacemaker_bt = BoxObj<PaceMaker>;
 
-/** Parent selection implementation for PaceMaker: select all parents.
- * PaceMakers derived from this class will select the highest block as the
- * direct parent, while including other tail blocks (up to parent_limit) as
- * uncles/aunts. */
-class PMAllParents: public virtual PaceMaker {
+/** Parent selection implementation for PaceMaker: select the highest tail that
+ * follows the current hqc block. */
+class PMHighTail: public virtual PaceMaker {
     block_t hqc_tail;
     const int32_t parent_limit;         /**< maximum number of parents */
-    
+
+    bool check_ancestry(const block_t &_a, const block_t &_b) {
+        block_t b;
+        for (b = _b;
+            b->get_height() > _a->get_height();
+            b = b->get_parents()[0]);
+        return b == _a;
+    }
+
     void reg_hqc_update() {
         hsc->async_hqc_update().then([this](const block_t &hqc) {
-            const auto &pref = hqc;
-            for (const auto &blk: hsc->get_tails())
-            {
-                block_t b;
-                for (b = blk;
-                    b->get_height() > pref->get_height();
-                    b = b->get_parents()[0]);
-                if (b == pref && blk->get_height() > hqc_tail->get_height())
-                    hqc_tail = blk;
-            }
+            for (const auto &tail: hsc->get_tails())
+                if (check_ancestry(hqc, tail) && tail->get_height() > hqc_tail->get_height())
+                    hqc_tail = tail;
             reg_hqc_update();
         });
     }
@@ -89,20 +90,16 @@ class PMAllParents: public virtual PaceMaker {
 
     void reg_receive_proposal() {
         hsc->async_wait_receive_proposal().then([this](const Proposal &prop) {
-            const auto &pref = hsc->get_hqc();
+            const auto &hqc = hsc->get_hqc();
             const auto &blk = prop.blk;
-            block_t b;
-            for (b = blk;
-                b->get_height() > pref->get_height();
-                b = b->get_parents()[0]);
-            if (b == pref && blk->get_height() > hqc_tail->get_height())
+            if (check_ancestry(hqc, blk) && blk->get_height() > hqc_tail->get_height())
                 hqc_tail = blk;
             reg_receive_proposal();
         });
     }
 
     public:
-    PMAllParents(int32_t parent_limit): parent_limit(parent_limit) {}
+    PMHighTail(int32_t parent_limit): parent_limit(parent_limit) {}
     void init() {
         hqc_tail = hsc->get_genesis();
         reg_hqc_update();
@@ -113,19 +110,20 @@ class PMAllParents: public virtual PaceMaker {
     std::vector<block_t> get_parents() override {
         const auto &tails = hsc->get_tails();
         std::vector<block_t> parents{hqc_tail};
-        auto nparents = tails.size();
-        if (parent_limit > 0)
-            nparents = std::min(nparents, (size_t)parent_limit);
-        nparents--;
-        /* add the rest of tails as "uncles/aunts" */
-        for (const auto &blk: tails)
-        {
-            if (blk != hqc_tail)
-            {
-                parents.push_back(blk);
-                if (!--nparents) break;
-            }
-        }
+        // TODO: inclusive block chain
+        // auto nparents = tails.size();
+        // if (parent_limit > 0)
+        //     nparents = std::min(nparents, (size_t)parent_limit);
+        // nparents--;
+        // /* add the rest of tails as "uncles/aunts" */
+        // for (const auto &blk: tails)
+        // {
+        //     if (blk != hqc_tail)
+        //     {
+        //         parents.push_back(blk);
+        //         if (!--nparents) break;
+        //     }
+        // }
         return std::move(parents);
     }
 };
@@ -195,12 +193,12 @@ class PMWaitQC: public virtual PaceMaker {
 };
 
 /** Naive PaceMaker where everyone can be a proposer at any moment. */
-struct PaceMakerDummy: public PMAllParents, public PMWaitQC {
+struct PaceMakerDummy: public PMHighTail, public PMWaitQC {
     PaceMakerDummy(int32_t parent_limit):
-        PMAllParents(parent_limit), PMWaitQC() {}
+        PMHighTail(parent_limit), PMWaitQC() {}
     void init(HotStuffCore *hsc) override {
         PaceMaker::init(hsc);
-        PMAllParents::init();
+        PMHighTail::init();
         PMWaitQC::init();
     }
 };
@@ -489,16 +487,6 @@ class PMStickyProposer: virtual public PaceMaker {
     }
 };
 
-struct PaceMakerSticky: public PMAllParents, public PMStickyProposer {
-    PaceMakerSticky(int32_t parent_limit, double qc_timeout, EventContext eb):
-        PMAllParents(parent_limit), PMStickyProposer(qc_timeout, eb) {}
-
-    void init(HotStuffCore *hsc) override {
-        PaceMaker::init(hsc);
-        PMAllParents::init();
-        PMStickyProposer::init();
-    }
-};
 
 /**
  * Simple long-standing round-robin style proposer liveness gadget.
@@ -744,13 +732,13 @@ class PMRoundRobinProposer: virtual public PaceMaker {
     }
 };
 
-struct PaceMakerRR: public PMAllParents, public PMRoundRobinProposer {
+struct PaceMakerRR: public PMHighTail, public PMRoundRobinProposer {
     PaceMakerRR(int32_t parent_limit, double qc_timeout, EventContext eb):
-        PMAllParents(parent_limit), PMRoundRobinProposer(qc_timeout, eb) {}
+        PMHighTail(parent_limit), PMRoundRobinProposer(qc_timeout, eb) {}
 
     void init(HotStuffCore *hsc) override {
         PaceMaker::init(hsc);
-        PMAllParents::init();
+        PMHighTail::init();
         PMRoundRobinProposer::init();
     }
 };
