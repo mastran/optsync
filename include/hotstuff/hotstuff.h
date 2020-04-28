@@ -277,7 +277,9 @@ class HotStuffBase: public HotStuffCore {
     }
 
     void do_broadcast_notify(const Notify &notify) override {
-        _do_broadcast<Notify, MsgNotify>(notify);
+         tcall.async_call([this, notify](salticidae::ThreadCall::Handle &){
+             _do_broadcast<Notify, MsgNotify>(notify);
+         });
     }
 
 
