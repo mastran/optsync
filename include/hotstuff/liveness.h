@@ -19,8 +19,7 @@
 #define _HOTSTUFF_LIVENESS_H
 
 #include "salticidae/util.h"
-#include "hotstuff/hotstuff.h"
-
+#include "hotstuff/consensus.h"
 
 namespace hotstuff {
 
@@ -249,381 +248,113 @@ class PaceMakerDummyFixed: public PaceMakerDummy {
  * sure you introduce mechanism to detect and ban such behavior, or use the
  * round-robin style pace maker instead.
  */
-class PMStickyProposer: virtual public PaceMaker {
-    enum {
-        PROPOSER,
-        FOLLOWER,
-        CANDIDATE
-    } role;
-    double qc_timeout;
-    double candidate_timeout;
-    EventContext ec;
-    /** QC timer or randomized timeout */
-    TimerEvent timer;
-    TimerEvent ev_imp;
-    block_t last_proposed;
-    /** the proposer it believes */
-    ReplicaID proposer;
+    class PMStickyProposer: virtual public PaceMaker {
+        enum {
+            PROPOSER,
+            FOLLOWER,
+            CANDIDATE
+        } role;
+        double qc_timeout;
+        double candidate_timeout;
+        EventContext ec;
+        /** QC timer or randomized timeout */
+        TimerEvent timer;
+        TimerEvent ev_imp;
+        block_t last_proposed;
+        /** the proposer it believes */
+        ReplicaID proposer;
 
-    /* extra state needed for a proposer */
-    std::queue<promise_t> pending_beats;
-    bool locked;
+        /* extra state needed for a proposer */
+        std::queue<promise_t> pending_beats;
+        bool locked;
 
-    /* extra state needed for a candidate */
-    std::unordered_map<ReplicaID, promise_t> last_proposed_by;
+        /* extra state needed for a candidate */
+        std::unordered_map<ReplicaID, promise_t> last_proposed_by;
 
-    promise_t pm_wait_receive_proposal;
-    promise_t pm_wait_propose;
-    promise_t pm_qc_finish;
+        promise_t pm_wait_receive_proposal;
+        promise_t pm_wait_propose;
+        promise_t pm_qc_finish;
 
-    void clear_promises() {
-        pm_wait_receive_proposal.reject();
-        pm_wait_propose.reject();
-        pm_qc_finish.reject();
-        for (auto &p: last_proposed_by)
-            p.second.reject();
-        last_proposed_by.clear();
-    }
-
-    /* helper functions for a follower */
-
-    void reg_follower_receive_proposal() {
-        pm_wait_receive_proposal.reject();
-        (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
-            .then(
-                salticidae::generic_bind(
-                    &PMStickyProposer::follower_receive_proposal, this, _1));
-    }
-
-    void follower_receive_proposal(const Proposal &prop) {
-        if (prop.proposer == proposer)
-        {
-            auto &qc_ref = prop.blk->get_qc_ref();
-            if (last_proposed && qc_ref != last_proposed)
-            {
-                HOTSTUFF_LOG_INFO("proposer misbehave");
-                to_candidate(); /* proposer misbehave */
-                return;
-            }
-            HOTSTUFF_LOG_PROTO("proposer emits new QC");
-            last_proposed = prop.blk;
-        }
-        reg_follower_receive_proposal();
-    }
-
-    /* helper functions for a proposer */
-
-    void proposer_schedule_next() {
-        if (!pending_beats.empty() && !locked)
-        {
-            auto pm = pending_beats.front();
-            pending_beats.pop();
+        void clear_promises() {
+            pm_wait_receive_proposal.reject();
+            pm_wait_propose.reject();
             pm_qc_finish.reject();
-            (pm_qc_finish = hsc->async_qc_finish(last_proposed))
-                .then([this, pm]() {
-                    timer.del();
-                    pm.resolve(proposer);
-                    timer.add(qc_timeout);
-                    HOTSTUFF_LOG_PROTO("QC timer reset");
-                });
-            locked = true;
+            for (auto &p: last_proposed_by)
+                p.second.reject();
+            last_proposed_by.clear();
         }
-    }
 
-    void reg_proposer_propose() {
-        pm_wait_propose.reject();
-        (pm_wait_propose = hsc->async_wait_proposal()).then(
-            salticidae::generic_bind(
-                &PMStickyProposer::proposer_propose, this, _1));
-    }
+        /* helper functions for a follower */
 
-    void proposer_propose(const Proposal &prop) {
-        last_proposed = prop.blk;
-        locked = false;
-        proposer_schedule_next();
-        reg_proposer_propose();
-    }
-
-    void propose_elect_block() {
-        DataStream s;
-        /* FIXME: should extra data be the voter's id? */
-        s << hsc->get_id();
-        /* propose a block for leader election */
-        hsc->on_propose(std::vector<uint256_t>{},
-                get_parents(), std::move(s));
-    }
-
-    /* helper functions for a candidate */
-
-    void candidate_qc_timeout() {
-        pm_qc_finish.reject();
-        pm_wait_propose.reject();
-        (pm_wait_propose = hsc->async_wait_proposal()).then([this](const Proposal &prop) {
-            const auto &blk = prop.blk;
-            (pm_qc_finish = hsc->async_qc_finish(blk)).then([this, blk]() {
-                HOTSTUFF_LOG_INFO("collected QC for %s", std::string(*blk).c_str());
-                /* managed to collect a QC */
-                to_proposer();
-                propose_elect_block();
-            });
-        });
-        double t = salticidae::gen_rand_timeout(candidate_timeout);
-        timer.del();
-        timer.add(t);
-        HOTSTUFF_LOG_INFO("candidate next try in %.2fs", t);
-        propose_elect_block();
-    }
-
-    void reg_cp_receive_proposal() {
-        pm_wait_receive_proposal.reject();
-        (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
-            .then(
-                salticidae::generic_bind(
-                    &PMStickyProposer::cp_receive_proposal, this, _1));
-    }
-
-    void cp_receive_proposal(const Proposal &prop) {
-        auto _proposer = prop.proposer;
-        auto &p = last_proposed_by[_proposer];
-        HOTSTUFF_LOG_PROTO("got block %s from %d", std::string(*prop.blk).c_str(), _proposer);
-        p.reject();
-        (p = hsc->async_qc_finish(prop.blk)).then([this, blk=prop.blk, _proposer]() {
-            if (hsc->get_hqc() == blk)
-                to_follower(_proposer);
-        });
-        reg_cp_receive_proposal();
-    }
-
-    /* role transitions */
-
-    void to_follower(ReplicaID new_proposer) {
-        HOTSTUFF_LOG_INFO("new role: follower");
-        clear_promises();
-        role = FOLLOWER;
-        proposer = new_proposer;
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(false);
-        timer.clear();
-        /* redirect all pending cmds to the new proposer */
-        while (!pending_beats.empty())
-        {
-            pending_beats.front().resolve(proposer);
-            pending_beats.pop();
+        void reg_follower_receive_proposal() {
+            pm_wait_receive_proposal.reject();
+            (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
+                    .then(
+                            salticidae::generic_bind(
+                                    &PMStickyProposer::follower_receive_proposal, this, _1));
         }
-        reg_follower_receive_proposal();
-    }
 
-    void to_proposer() {
-        HOTSTUFF_LOG_INFO("new role: proposer");
-        clear_promises();
-        role = PROPOSER;
-        proposer = hsc->get_id();
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(true);
-        timer = TimerEvent(ec, [this](TimerEvent &) {
-            /* proposer unable to get a QC in time */
-            to_candidate();
-        });
-        reg_cp_receive_proposal();
-        proposer_propose(Proposal(-1, hsc->get_genesis(), nullptr));
-    }
-
-    void to_candidate() {
-        HOTSTUFF_LOG_INFO("new role: candidate");
-        clear_promises();
-        role = CANDIDATE;
-        proposer = hsc->get_id();
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(false);
-        timer = TimerEvent(ec, [this](TimerEvent &) {
-            candidate_qc_timeout();
-        });
-        candidate_timeout = qc_timeout;
-        reg_cp_receive_proposal();
-        candidate_qc_timeout();
-    }
-
-    protected:
-    void impeach() override {
-        if (role == CANDIDATE) return;
-        ev_imp = TimerEvent(ec, [this](TimerEvent &) {
-            to_candidate();
-        });
-        ev_imp.add(0);
-        HOTSTUFF_LOG_INFO("schedule to impeach the proposer");
-    }
-
-    public:
-    PMStickyProposer(double qc_timeout, const EventContext &ec):
-        qc_timeout(qc_timeout), ec(ec) {}
-
-    size_t get_pending_size() override { return pending_beats.size(); }
-
-    void init() { to_candidate(); }
-
-    ReplicaID get_proposer() override {
-        return proposer;
-    }
-
-    promise_t beat() override {
-        if (role != FOLLOWER)
-        {
-            promise_t pm;
-            pending_beats.push(pm);
-            if (role == PROPOSER)
-                proposer_schedule_next();
-            return std::move(pm);
-        }
-        else
-            return promise_t([proposer=proposer](promise_t &pm) {
-                pm.resolve(proposer);
-            });
-    }
-
-    promise_t beat_resp(ReplicaID last_proposer) override {
-        return promise_t([this, last_proposer](promise_t &pm) {
-            pm.resolve(last_proposer);
-        });
-    }
-};
-
-
-/**
- * Simple long-standing round-robin style proposer liveness gadget.
- */
-class PMRoundRobinProposer: virtual public PaceMaker {
-    enum {
-        PROPOSER,
-        FOLLOWER,
-        CANDIDATE /* rotating */
-    } role;
-    double qc_timeout;
-    double candidate_timeout;
-    EventContext ec;
-    /** QC timer or randomized timeout */
-    TimerEvent timer;
-    TimerEvent ev_imp;
-    block_t last_proposed;
-    /** the proposer it believes */
-    ReplicaID proposer;
-
-    /* extra state needed for a proposer */
-    std::queue<promise_t> pending_beats;
-    bool locked;
-
-    /* extra state needed for a candidate */
-    std::unordered_map<ReplicaID, promise_t> last_proposed_by;
-
-    promise_t pm_wait_receive_proposal;
-    promise_t pm_wait_propose;
-    promise_t pm_qc_finish;
-
-    void clear_promises() {
-        pm_wait_receive_proposal.reject();
-        pm_wait_propose.reject();
-        pm_qc_finish.reject();
-        for (auto &p: last_proposed_by)
-            p.second.reject();
-        last_proposed_by.clear();
-    }
-
-    /* helper functions for a follower */
-
-    void reg_follower_receive_proposal() {
-        pm_wait_receive_proposal.reject();
-        (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
-            .then(
-                salticidae::generic_bind(
-                    &PMRoundRobinProposer::follower_receive_proposal, this, _1));
-    }
-
-    void follower_receive_proposal(const Proposal &prop) {
-        if (prop.proposer == proposer)
-        {
-            auto &qc_ref = prop.blk->get_qc_ref();
-            if (last_proposed && qc_ref != last_proposed)
+        void follower_receive_proposal(const Proposal &prop) {
+            if (prop.proposer == proposer)
             {
-                HOTSTUFF_LOG_INFO("proposer misbehave");
-                to_candidate(); /* proposer misbehave */
-                return;
+                auto &qc_ref = prop.blk->get_qc_ref();
+                if (last_proposed && qc_ref != last_proposed)
+                {
+                    HOTSTUFF_LOG_INFO("proposer misbehave");
+                    to_candidate(); /* proposer misbehave */
+                    return;
+                }
+                HOTSTUFF_LOG_PROTO("proposer emits new QC");
+                last_proposed = prop.blk;
             }
-            HOTSTUFF_LOG_PROTO("proposer emits new QC");
+            reg_follower_receive_proposal();
+        }
+
+        /* helper functions for a proposer */
+
+        void proposer_schedule_next() {
+            if (!pending_beats.empty() && !locked)
+            {
+                auto pm = pending_beats.front();
+                pending_beats.pop();
+                pm_qc_finish.reject();
+                (pm_qc_finish = hsc->async_qc_finish(last_proposed))
+                        .then([this, pm]() {
+                            timer.del();
+                            pm.resolve(proposer);
+                            timer.add(qc_timeout);
+                            HOTSTUFF_LOG_PROTO("QC timer reset");
+                        });
+                locked = true;
+            }
+        }
+
+        void reg_proposer_propose() {
+            pm_wait_propose.reject();
+            (pm_wait_propose = hsc->async_wait_proposal()).then(
+                    salticidae::generic_bind(
+                            &PMStickyProposer::proposer_propose, this, _1));
+        }
+
+        void proposer_propose(const Proposal &prop) {
             last_proposed = prop.blk;
+            locked = false;
+            proposer_schedule_next();
+            reg_proposer_propose();
         }
-        reg_follower_receive_proposal();
-    }
 
-    /* helper functions for a proposer */
-
-    void proposer_schedule_next() {
-        if (!pending_beats.empty() && !locked)
-        {
-            auto pm = pending_beats.front();
-            pending_beats.pop();
-            pm_qc_finish.reject();
-            (pm_qc_finish = hsc->async_qc_finish(last_proposed))
-                .then([this, pm]() {
-                    timer.del();
-                    pm.resolve(proposer);
-                    timer.add(qc_timeout);
-                    HOTSTUFF_LOG_PROTO("QC timer reset");
-                });
-            locked = true;
+        void propose_elect_block() {
+            DataStream s;
+            /* FIXME: should extra data be the voter's id? */
+            s << hsc->get_id();
+            /* propose a block for leader election */
+            hsc->on_propose(std::vector<uint256_t>{},
+                            get_parents(), std::move(s));
         }
-    }
 
-    void reg_proposer_propose() {
-        pm_wait_propose.reject();
-        (pm_wait_propose = hsc->async_wait_proposal()).then(
-            salticidae::generic_bind(
-                &PMRoundRobinProposer::proposer_propose, this, _1));
-    }
+        /* helper functions for a candidate */
 
-    void proposer_propose(const Proposal &prop) {
-        last_proposed = prop.blk;
-        locked = false;
-        proposer_schedule_next();
-        reg_proposer_propose();
-    }
-
-    void propose_elect_block() {
-        DataStream s;
-        /* FIXME: should extra data be the voter's id? */
-        s << hsc->get_id();
-        /* propose a block for leader election */
-        hsc->on_propose(std::vector<uint256_t>{},
-                get_parents(), std::move(s));
-    }
-
-    /* helper functions for a candidate */
-
-    void reg_cp_receive_proposal() {
-        pm_wait_receive_proposal.reject();
-        (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
-            .then(
-                salticidae::generic_bind(
-                    &PMRoundRobinProposer::cp_receive_proposal, this, _1));
-    }
-
-    void cp_receive_proposal(const Proposal &prop) {
-        auto _proposer = prop.proposer;
-        auto &p = last_proposed_by[_proposer];
-        HOTSTUFF_LOG_PROTO("got block %s from %d", std::string(*prop.blk).c_str(), _proposer);
-        p.reject();
-        (p = hsc->async_qc_finish(prop.blk)).then([this, blk=prop.blk, _proposer]() {
-            if (_proposer == proposer)
-                to_follower();
-        });
-        reg_cp_receive_proposal();
-    }
-
-    void candidate_qc_timeout() {
-        timer.del();
-        timer.add(candidate_timeout);
-        candidate_timeout *= 1.01;
-        proposer = (proposer + 1) % hsc->get_config().nreplicas;
-        if (proposer == hsc->get_id())
-        {
+        void candidate_qc_timeout() {
             pm_qc_finish.reject();
             pm_wait_propose.reject();
             (pm_wait_propose = hsc->async_wait_proposal()).then([this](const Proposal &prop) {
@@ -635,113 +366,391 @@ class PMRoundRobinProposer: virtual public PaceMaker {
                     propose_elect_block();
                 });
             });
+            double t = salticidae::gen_rand_timeout(candidate_timeout);
+            timer.del();
+            timer.add(t);
+            HOTSTUFF_LOG_INFO("candidate next try in %.2fs", t);
             propose_elect_block();
         }
-        HOTSTUFF_LOG_INFO("candidate rotates to %d, next try in %.2fs",
-                            proposer, candidate_timeout);
-    }
 
-    /* role transitions */
-
-    void to_follower() {
-        HOTSTUFF_LOG_INFO("new role: follower");
-        clear_promises();
-        role = FOLLOWER;
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(false);
-        timer.clear();
-        /* redirect all pending cmds to the new proposer */
-        while (!pending_beats.empty())
-        {
-            pending_beats.front().resolve(proposer);
-            pending_beats.pop();
+        void reg_cp_receive_proposal() {
+            pm_wait_receive_proposal.reject();
+            (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
+                    .then(
+                            salticidae::generic_bind(
+                                    &PMStickyProposer::cp_receive_proposal, this, _1));
         }
-        reg_follower_receive_proposal();
-    }
 
-    void to_proposer() {
-        HOTSTUFF_LOG_INFO("new role: proposer");
-        clear_promises();
-        role = PROPOSER;
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(true);
-        timer = TimerEvent(ec, [this](TimerEvent &) {
-            /* proposer unable to get a QC in time */
-            to_candidate();
-        });
-        proposer_propose(Proposal(-1, hsc->get_genesis(), nullptr));
-    }
+        void cp_receive_proposal(const Proposal &prop) {
+            auto _proposer = prop.proposer;
+            auto &p = last_proposed_by[_proposer];
+            HOTSTUFF_LOG_PROTO("got block %s from %d", std::string(*prop.blk).c_str(), _proposer);
+            p.reject();
+            (p = hsc->async_qc_finish(prop.blk)).then([this, blk=prop.blk, _proposer]() {
+                if (hsc->get_hqc() == blk)
+                    to_follower(_proposer);
+            });
+            reg_cp_receive_proposal();
+        }
 
-    void to_candidate() {
-        HOTSTUFF_LOG_INFO("new role: candidate");
-        clear_promises();
-        role = CANDIDATE;
-        last_proposed = nullptr;
-        hsc->set_vote_disabled(false);
-        timer = TimerEvent(ec, [this](TimerEvent &) {
+        /* role transitions */
+
+        void to_follower(ReplicaID new_proposer) {
+            HOTSTUFF_LOG_INFO("new role: follower");
+            clear_promises();
+            role = FOLLOWER;
+            proposer = new_proposer;
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(false);
+            timer.clear();
+            /* redirect all pending cmds to the new proposer */
+            while (!pending_beats.empty())
+            {
+                pending_beats.front().resolve(proposer);
+                pending_beats.pop();
+            }
+            reg_follower_receive_proposal();
+        }
+
+        void to_proposer() {
+            HOTSTUFF_LOG_INFO("new role: proposer");
+            clear_promises();
+            role = PROPOSER;
+            proposer = hsc->get_id();
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(true);
+            timer = TimerEvent(ec, [this](TimerEvent &) {
+                /* proposer unable to get a QC in time */
+                to_candidate();
+            });
+            reg_cp_receive_proposal();
+            proposer_propose(Proposal(-1, hsc->get_genesis(), nullptr));
+        }
+
+        void to_candidate() {
+            HOTSTUFF_LOG_INFO("new role: candidate");
+            clear_promises();
+            role = CANDIDATE;
+            proposer = hsc->get_id();
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(false);
+            timer = TimerEvent(ec, [this](TimerEvent &) {
+                candidate_qc_timeout();
+            });
+            candidate_timeout = qc_timeout;
+            reg_cp_receive_proposal();
             candidate_qc_timeout();
-        });
-        candidate_timeout = qc_timeout * 0.1;
-        reg_cp_receive_proposal();
-        candidate_qc_timeout();
-    }
+        }
 
     protected:
-    void impeach() override {
-        if (role == CANDIDATE) return;
-        ev_imp = TimerEvent(ec, [this](TimerEvent &) {
-            to_candidate();
-        });
-        ev_imp.add(0);
-        HOTSTUFF_LOG_INFO("schedule to impeach the proposer");
-    }
+        void impeach() override {
+            if (role == CANDIDATE) return;
+            ev_imp = TimerEvent(ec, [this](TimerEvent &) {
+                to_candidate();
+            });
+            ev_imp.add(0);
+            HOTSTUFF_LOG_INFO("schedule to impeach the proposer");
+        }
 
     public:
-    PMRoundRobinProposer(double qc_timeout, const EventContext &ec):
-        qc_timeout(qc_timeout), ec(ec), proposer(0) {}
+        PMStickyProposer(double qc_timeout, const EventContext &ec):
+                qc_timeout(qc_timeout), ec(ec) {}
 
-    size_t get_pending_size() override { return pending_beats.size(); }
+        size_t get_pending_size() override { return pending_beats.size(); }
 
-    void init() {
-        to_candidate();
-    }
+        void init() { to_candidate(); }
 
-    ReplicaID get_proposer() override {
-        return proposer;
-    }
-
-    promise_t beat() override {
-        if (role != FOLLOWER)
-        {
-            promise_t pm;
-            pending_beats.push(pm);
-            if (role == PROPOSER)
-                proposer_schedule_next();
-            return std::move(pm);
+        ReplicaID get_proposer() override {
+            return proposer;
         }
-        else
-            return promise_t([proposer=proposer](promise_t &pm) {
-                pm.resolve(proposer);
+
+        promise_t beat() override {
+            if (role != FOLLOWER)
+            {
+                promise_t pm;
+                pending_beats.push(pm);
+                if (role == PROPOSER)
+                    proposer_schedule_next();
+                return std::move(pm);
+            }
+            else
+                return promise_t([proposer=proposer](promise_t &pm) {
+                    pm.resolve(proposer);
+                });
+        }
+
+        promise_t beat_resp(ReplicaID last_proposer) override {
+            return promise_t([this, last_proposer](promise_t &pm) {
+                pm.resolve(last_proposer);
             });
-    }
+        }
+    };
 
-    promise_t beat_resp(ReplicaID last_proposer) override {
-        return promise_t([this, last_proposer](promise_t &pm) {
-            pm.resolve(last_proposer);
-        });
-    }
-};
+    struct PaceMakerSticky: public PMHighTail, public PMStickyProposer {
+        PaceMakerSticky(int32_t parent_limit, double qc_timeout, EventContext eb):
+                PMHighTail(parent_limit), PMStickyProposer(qc_timeout, eb) {}
 
-struct PaceMakerRR: public PMHighTail, public PMRoundRobinProposer {
-    PaceMakerRR(int32_t parent_limit, double qc_timeout, EventContext eb):
-        PMHighTail(parent_limit), PMRoundRobinProposer(qc_timeout, eb) {}
+        void init(HotStuffCore *hsc) override {
+            PaceMaker::init(hsc);
+            PMHighTail::init();
+            PMStickyProposer::init();
+        }
+    };
 
-    void init(HotStuffCore *hsc) override {
-        PaceMaker::init(hsc);
-        PMHighTail::init();
-        PMRoundRobinProposer::init();
-    }
-};
+/**
+ * Simple long-standing round-robin style proposer liveness gadget.
+ */
+    class PMRoundRobinProposer: virtual public PaceMaker {
+        enum {
+            PROPOSER,
+            FOLLOWER,
+            CANDIDATE /* rotating */
+        } role;
+        double qc_timeout;
+        double candidate_timeout;
+        EventContext ec;
+        /** QC timer or randomized timeout */
+        TimerEvent timer;
+        TimerEvent ev_imp;
+        block_t last_proposed;
+        /** the proposer it believes */
+        ReplicaID proposer;
+
+        /* extra state needed for a proposer */
+        std::queue<promise_t> pending_beats;
+        bool locked;
+
+        /* extra state needed for a candidate */
+        std::unordered_map<ReplicaID, promise_t> last_proposed_by;
+
+        promise_t pm_wait_receive_proposal;
+        promise_t pm_wait_propose;
+        promise_t pm_qc_finish;
+
+        void clear_promises() {
+            pm_wait_receive_proposal.reject();
+            pm_wait_propose.reject();
+            pm_qc_finish.reject();
+            for (auto &p: last_proposed_by)
+                p.second.reject();
+            last_proposed_by.clear();
+        }
+
+        /* helper functions for a follower */
+
+        void reg_follower_receive_proposal() {
+            pm_wait_receive_proposal.reject();
+            (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
+                    .then(
+                            salticidae::generic_bind(
+                                    &PMRoundRobinProposer::follower_receive_proposal, this, _1));
+        }
+
+        void follower_receive_proposal(const Proposal &prop) {
+            if (prop.proposer == proposer)
+            {
+                auto &qc_ref = prop.blk->get_qc_ref();
+                if (last_proposed && qc_ref != last_proposed)
+                {
+                    HOTSTUFF_LOG_INFO("proposer misbehave");
+                    to_candidate(); /* proposer misbehave */
+                    return;
+                }
+                HOTSTUFF_LOG_PROTO("proposer emits new QC");
+                last_proposed = prop.blk;
+            }
+            reg_follower_receive_proposal();
+        }
+
+        /* helper functions for a proposer */
+
+        void proposer_schedule_next() {
+            if (!pending_beats.empty() && !locked)
+            {
+                auto pm = pending_beats.front();
+                pending_beats.pop();
+                pm_qc_finish.reject();
+                (pm_qc_finish = hsc->async_qc_finish(last_proposed))
+                        .then([this, pm]() {
+                            timer.del();
+                            pm.resolve(proposer);
+                            timer.add(qc_timeout);
+                            HOTSTUFF_LOG_PROTO("QC timer reset");
+                        });
+                locked = true;
+            }
+        }
+
+        void reg_proposer_propose() {
+            pm_wait_propose.reject();
+            (pm_wait_propose = hsc->async_wait_proposal()).then(
+                    salticidae::generic_bind(
+                            &PMRoundRobinProposer::proposer_propose, this, _1));
+        }
+
+        void proposer_propose(const Proposal &prop) {
+            last_proposed = prop.blk;
+            locked = false;
+            proposer_schedule_next();
+            reg_proposer_propose();
+        }
+
+        void propose_elect_block() {
+            DataStream s;
+            /* FIXME: should extra data be the voter's id? */
+            s << hsc->get_id();
+            /* propose a block for leader election */
+            hsc->on_propose(std::vector<uint256_t>{},
+                            get_parents(), std::move(s));
+        }
+
+        /* helper functions for a candidate */
+
+        void reg_cp_receive_proposal() {
+            pm_wait_receive_proposal.reject();
+            (pm_wait_receive_proposal = hsc->async_wait_receive_proposal())
+                    .then(
+                            salticidae::generic_bind(
+                                    &PMRoundRobinProposer::cp_receive_proposal, this, _1));
+        }
+
+        void cp_receive_proposal(const Proposal &prop) {
+            auto _proposer = prop.proposer;
+            auto &p = last_proposed_by[_proposer];
+            HOTSTUFF_LOG_PROTO("got block %s from %d", std::string(*prop.blk).c_str(), _proposer);
+            p.reject();
+            (p = hsc->async_qc_finish(prop.blk)).then([this, blk=prop.blk, _proposer]() {
+                if (_proposer == proposer)
+                    to_follower();
+            });
+            reg_cp_receive_proposal();
+        }
+
+        void candidate_qc_timeout() {
+            timer.del();
+            timer.add(candidate_timeout);
+            candidate_timeout *= 1.01;
+            proposer = (proposer + 1) % hsc->get_config().nreplicas;
+            if (proposer == hsc->get_id())
+            {
+                pm_qc_finish.reject();
+                pm_wait_propose.reject();
+                (pm_wait_propose = hsc->async_wait_proposal()).then([this](const Proposal &prop) {
+                    const auto &blk = prop.blk;
+                    (pm_qc_finish = hsc->async_qc_finish(blk)).then([this, blk]() {
+                        HOTSTUFF_LOG_INFO("collected QC for %s", std::string(*blk).c_str());
+                        /* managed to collect a QC */
+                        to_proposer();
+                        propose_elect_block();
+                    });
+                });
+                propose_elect_block();
+            }
+            HOTSTUFF_LOG_INFO("candidate rotates to %d, next try in %.2fs",
+                              proposer, candidate_timeout);
+        }
+
+        /* role transitions */
+
+        void to_follower() {
+            HOTSTUFF_LOG_INFO("new role: follower");
+            clear_promises();
+            role = FOLLOWER;
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(false);
+            timer.clear();
+            /* redirect all pending cmds to the new proposer */
+            while (!pending_beats.empty())
+            {
+                pending_beats.front().resolve(proposer);
+                pending_beats.pop();
+            }
+            reg_follower_receive_proposal();
+        }
+
+        void to_proposer() {
+            HOTSTUFF_LOG_INFO("new role: proposer");
+            clear_promises();
+            role = PROPOSER;
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(true);
+            timer = TimerEvent(ec, [this](TimerEvent &) {
+                /* proposer unable to get a QC in time */
+                to_candidate();
+            });
+            proposer_propose(Proposal(-1, hsc->get_genesis(), nullptr));
+        }
+
+        void to_candidate() {
+            HOTSTUFF_LOG_INFO("new role: candidate");
+            clear_promises();
+            role = CANDIDATE;
+            last_proposed = nullptr;
+            hsc->set_vote_disabled(false);
+            timer = TimerEvent(ec, [this](TimerEvent &) {
+                candidate_qc_timeout();
+            });
+            candidate_timeout = qc_timeout * 0.1;
+            reg_cp_receive_proposal();
+            candidate_qc_timeout();
+        }
+
+    protected:
+        void impeach() override {
+            if (role == CANDIDATE) return;
+            ev_imp = TimerEvent(ec, [this](TimerEvent &) {
+                to_candidate();
+            });
+            ev_imp.add(0);
+            HOTSTUFF_LOG_INFO("schedule to impeach the proposer");
+        }
+
+    public:
+        PMRoundRobinProposer(double qc_timeout, const EventContext &ec):
+                qc_timeout(qc_timeout), ec(ec), proposer(0) {}
+
+        size_t get_pending_size() override { return pending_beats.size(); }
+
+        void init() {
+            to_candidate();
+        }
+
+        ReplicaID get_proposer() override {
+            return proposer;
+        }
+
+        promise_t beat() override {
+            if (role != FOLLOWER)
+            {
+                promise_t pm;
+                pending_beats.push(pm);
+                if (role == PROPOSER)
+                    proposer_schedule_next();
+                return std::move(pm);
+            }
+            else
+                return promise_t([proposer=proposer](promise_t &pm) {
+                    pm.resolve(proposer);
+                });
+        }
+
+        promise_t beat_resp(ReplicaID last_proposer) override {
+            return promise_t([this, last_proposer](promise_t &pm) {
+                pm.resolve(last_proposer);
+            });
+        }
+    };
+
+    struct PaceMakerRR: public PMHighTail, public PMRoundRobinProposer {
+        PaceMakerRR(int32_t parent_limit, double qc_timeout, EventContext eb):
+                PMHighTail(parent_limit), PMRoundRobinProposer(qc_timeout, eb) {}
+
+        void init(HotStuffCore *hsc) override {
+            PaceMaker::init(hsc);
+            PMHighTail::init();
+            PMRoundRobinProposer::init();
+        }
+    };
 
 }
 

@@ -102,9 +102,7 @@ bool HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, con
             (_hqc->view == hqc.first->view && height_ra_blk == height_hqc_ancestor && _hqc->get_height() >= hqc.first->get_height())
     ){
         hqc = std::make_pair(_hqc, qc->clone());
-        if (_hqc->cert_type == RESPONSIVE_CERT){
-            hqc_ancestor = std::make_pair(_hqc, qc->clone());
-        }else if(hva_blk != nullptr) {
+        if(hva_blk != nullptr) {
             hqc_ancestor = std::make_pair(hva_blk, hva_qc->clone());
         }
         on_hqc_update();
@@ -133,7 +131,7 @@ void HotStuffCore::check_commit(const block_t &blk) {
         if(blk->decision == 1)
             continue;
         blk->decision = 1;
-        do_consensus(blk);
+//        do_consensus(blk);
         LOG_PROTO("commit %s", std::string(*blk).c_str());
         for (size_t i = 0; i < blk->cmds.size(); i++)
             do_decide(Finality(id, 1, i, blk->height,
@@ -153,6 +151,7 @@ void HotStuffCore::_vote(const block_t &blk) {
 #ifndef SYNCHS_NOVOTEBROADCAST
     on_receive_vote(vote);
 #endif
+
     do_broadcast_vote(vote);
     set_commit_timer(blk, 2 * config.delta);
     //set_blame_timer(3 * config.delta);
@@ -164,7 +163,6 @@ void HotStuffCore::_notify(const block_t &blk, const quorum_cert_bt &qc) {
     const auto &blk_hash = blk->get_hash();
 
     Notify notify(id, blk_hash, qc->clone(), this);
-
     do_broadcast_notify(notify);
 }
 
@@ -356,14 +354,14 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
 //         Start proposing new blocks
         on_qc_finish(blk);
 
-    }
-    else if(qsize == config.nresponsive){
+    } else
+        if(qsize == config.nresponsive){
         blk->cert_type = RESPONSIVE_CERT;
         qc->compute();
-//        on_qc_finish(blk);
-        update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
-        stop_commit_timer(blk->height);
+
         check_commit(blk);
+        stop_commit_timer(blk->height);
+        update_hqc(blk, qc, blk, qc);
         _notify(blk, qc);
     }
 }
@@ -379,11 +377,11 @@ void HotStuffCore::on_receive_notify(const Notify &notify) {
 
     LOG_PROTO("got notify blk=%s", std::string(*blk).c_str());
 
-    if (!finished_propose[blk])
-    {
-        // FIXME: fill notifier as proposer as a quickfix here, may be inaccurate
-        on_receive_proposal(Proposal(notify.notifier, blk, nullptr));
-    }
+//    if (!finished_propose[blk])
+//    {
+//        // FIXME: fill notifier as proposer as a quickfix here, may be inaccurate
+//        on_receive_proposal(Proposal(notify.notifier, blk, nullptr));
+//    }
 
     if (blk->cert_type != RESPONSIVE_CERT) {
         blk->cert_type = RESPONSIVE_CERT;

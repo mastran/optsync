@@ -246,6 +246,8 @@ class HotStuffBase: public HotStuffCore {
     /** receives a block */
     inline void resp_blk_handler(MsgRespBlock &&, const Net::conn_t &);
 
+    inline promise_t verify_notify(Notify &notify);
+
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
         //M m(t);

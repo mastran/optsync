@@ -232,7 +232,6 @@ void HotStuffBase::propose_handler(MsgPropose &&msg, const Net::conn_t &conn) {
     auto &prop = msg.proposal;
     block_t blk = prop.blk;
     if (!blk) return;
-
     promise::all(std::vector<promise_t>{
         async_deliver_blk(blk->get_hash(), peer)
     }).then([this, prop = std::move(prop)]() {
@@ -256,22 +255,30 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
     });
 }
 
+promise_t HotStuffBase::verify_notify(Notify &notify){
+    block_t blk = storage->find_blk(notify.blk_hash);
+    if(blk->get_decision() == 1){
+        promise_t pm;
+        return pm.then([]{ return true;});
+    }
+    return notify.verify(vpool);
+}
+
 void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
     const NetAddr &peer = conn->get_peer();
     if (peer.is_null()) return;
     msg.postponed_parse(this);
 
     RcObj<Notify> n(new Notify(std::move(msg.notify)));
-    promise::all(std::vector<promise_t>{
-            async_deliver_blk(n->blk_hash, peer),
-            n->verify(vpool),
-    }).then([this, n](const promise::values_t values) {
-        if (!promise::any_cast<bool>(values[1]))
-            LOG_WARN("invalid notify from %d", n->notifier);
-        else
-            on_receive_notify(*n);
-    });
-
+        promise::all(std::vector<promise_t>{
+                async_deliver_blk(n->blk_hash, peer),
+                verify_notify(*n)
+        }).then([this, n, peer](const promise::values_t values) {
+            if (!promise::any_cast<bool>(values[1]))
+                LOG_WARN("invalid notify from %s", std::string(peer).c_str());
+            else
+                on_receive_notify(*n);
+        });
 }
 
 void HotStuffBase::status_handler(MsgStatus &&msg, const Net::conn_t &conn) {
@@ -530,7 +537,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
 }
 
 void HotStuffBase::do_consensus(const block_t &blk){
-    pmaker->on_consensus(blk);
+//    pmaker->on_consensus(blk);
 }
 
 void HotStuffBase::do_broadcast_proposal(const Proposal &prop) {
@@ -539,7 +546,6 @@ void HotStuffBase::do_broadcast_proposal(const Proposal &prop) {
     //for (const auto &replica: peers)
     //    pn.send_msg(prop_msg, replica);
 }
-
 
 void HotStuffBase::do_decide(Finality &&fin) {
     part_decided++;
@@ -556,7 +562,6 @@ void HotStuffBase::do_status(const Status &status) {
     MsgStatus m(status);
     ReplicaID next_proposer = pmaker->get_proposer();
 
-//    LOG_INFO("Sending status: %d, %s", next_proposer, std::string(status).c_str());
     if (next_proposer != get_id())
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
@@ -616,7 +621,6 @@ void HotStuffBase::start(
                     cmd_pending_buffer.pop();
                 }
                 pmaker->beat().then([this, cmds = std::move(cmds)](ReplicaID proposer) {
-
                     if (proposer == get_id())
                         on_propose(cmds, pmaker->get_parents());
                 });

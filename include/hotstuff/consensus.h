@@ -49,7 +49,6 @@ class HotStuffCore {
     std::pair<block_t, quorum_cert_bt> hqc_ancestor;   /**< highest responsive ancestor */
     block_t b_exec;                            /**< last executed block */
     uint32_t vheight;          /**< height of the block last voted for */
-    uint32_t nheight;          /**< height of the block last notified for */
     uint32_t view;             /**< the current view number */
     /* Q: does the proposer retry the same block in a new view? */
     /* === only valid for the current view === */
@@ -345,7 +344,6 @@ struct Vote: public Serializable {
 
 
 struct Notify: public Serializable {
-    ReplicaID notifier;
     uint256_t blk_hash;
     quorum_cert_bt qc;
 
@@ -357,13 +355,11 @@ struct Notify: public Serializable {
            const uint256_t blk_hash,
            quorum_cert_bt &&qc,
            HotStuffCore *hsc):
-            notifier(notifier),
             blk_hash(blk_hash),
             qc(std::move(qc)),
             hsc(hsc) {}
 
     Notify(const Notify &other):
-            notifier(other.notifier),
             blk_hash(other.blk_hash),
             qc(other.qc ? other.qc->clone() : nullptr),
             hsc(other.hsc) {}
@@ -371,11 +367,11 @@ struct Notify: public Serializable {
     Notify(Notify &&other) = default;
 
     void serialize(DataStream &s) const override {
-        s << notifier << blk_hash << *qc;
+        s << blk_hash << *qc;
     }
 
     void unserialize(DataStream &s) override {
-        s >> notifier >> blk_hash;
+        s >> blk_hash;
         qc = hsc->parse_quorum_cert(s);
     }
 
