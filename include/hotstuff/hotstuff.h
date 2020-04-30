@@ -246,6 +246,8 @@ class HotStuffBase: public HotStuffCore {
     /** receives a block */
     inline void resp_blk_handler(MsgRespBlock &&, const Net::conn_t &);
 
+    inline promise_t verify_notify(Notify &notify);
+
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
         //M m(t);
@@ -277,9 +279,7 @@ class HotStuffBase: public HotStuffCore {
     }
 
     void do_broadcast_notify(const Notify &notify) override {
-         tcall.async_call([this, notify](salticidae::ThreadCall::Handle &){
-             _do_broadcast<Notify, MsgNotify>(notify);
-         });
+        _do_broadcast<Notify, MsgNotify>(notify);
     }
 
 

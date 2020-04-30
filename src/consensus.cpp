@@ -102,9 +102,7 @@ bool HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, con
             (_hqc->view == hqc.first->view && height_ra_blk == height_hqc_ancestor && _hqc->get_height() >= hqc.first->get_height())
     ){
         hqc = std::make_pair(_hqc, qc->clone());
-        if (_hqc->cert_type == RESPONSIVE_CERT){
-            hqc_ancestor = std::make_pair(_hqc, qc->clone());
-        }else if(hva_blk != nullptr) {
+        if(hva_blk != nullptr) {
             hqc_ancestor = std::make_pair(hva_blk, hva_qc->clone());
         }
         on_hqc_update();
@@ -360,8 +358,8 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
     else if(qsize == config.nresponsive){
         blk->cert_type = RESPONSIVE_CERT;
         qc->compute();
-//        on_qc_finish(blk);
-        update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
+
+        update_hqc(blk, qc, blk, qc);
         stop_commit_timer(blk->height);
         check_commit(blk);
         _notify(blk, qc);

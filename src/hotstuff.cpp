@@ -256,6 +256,15 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
     });
 }
 
+promise_t HotStuffBase::verify_notify(Notify &notify){
+    block_t blk = storage->find_blk(notify.blk_hash);
+    if(blk->get_decision() == 1){
+        promise_t pm;
+        return pm.then([]{ return true;});
+    }
+    return notify.verify(vpool);
+}
+
 void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
     const NetAddr &peer = conn->get_peer();
     if (peer.is_null()) return;
@@ -264,7 +273,7 @@ void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
     RcObj<Notify> n(new Notify(std::move(msg.notify)));
     promise::all(std::vector<promise_t>{
             async_deliver_blk(n->blk_hash, peer),
-            n->verify(vpool),
+            verify_notify(*n),
     }).then([this, n](const promise::values_t values) {
         if (!promise::any_cast<bool>(values[1]))
             LOG_WARN("invalid notify from %d", n->notifier);
