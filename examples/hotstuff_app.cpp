@@ -113,15 +113,15 @@ class HotStuffApp: public HotStuff {
         resp_queue.enqueue(fin);
     }
 
-#ifdef SYNCHS_AUTOCLI
-    void do_demand_commands(size_t blk_size) override {
-        size_t ncli = client_conns.size();
-        size_t bsize = (blk_size + ncli - 1) / ncli;
-        hotstuff::MsgDemandCmd mdc{bsize};
-        for(const auto &conn: client_conns)
-            cn.send_msg(mdc, conn);
-    }
-#endif
+//#ifdef SYNCHS_AUTOCLI
+//    void do_demand_commands(size_t blk_size) override {
+//        size_t ncli = client_conns.size();
+//        size_t bsize = (blk_size + ncli - 1) / ncli;
+//        hotstuff::MsgDemandCmd mdc{bsize};
+//        for(const auto &conn: client_conns)
+//            cn.send_msg(mdc, conn);
+//    }
+//#endif
 
 #ifdef HOTSTUFF_MSG_STAT
     std::unordered_set<conn_t> client_conns;
@@ -263,6 +263,7 @@ int main(int argc, char **argv) {
             .tls_key(tls_priv_key)
             .tls_cert(tls_cert);
     }
+
     repnet_config
         .burst_size(opt_repburst->get())
         .nworker(opt_repnworker->get());
@@ -281,6 +282,7 @@ int main(int argc, char **argv) {
                         opt_nworker->get(),
                         repnet_config,
                         clinet_config);
+
     std::vector<std::tuple<NetAddr, bytearray_t, bytearray_t>> reps;
     for (auto &r: replicas)
     {
@@ -379,7 +381,6 @@ void HotStuffApp::start(const std::vector<std::tuple<NetAddr, bytearray_t, bytea
     impeach_timer = TimerEvent(ec, [this](TimerEvent &) {
 //        if (get_decision_waiting().size())
 //            get_pace_maker()->impeach();
-        reset_imp_timer();
     });
     impeach_timer.add(impeach_timeout);
     HOTSTUFF_LOG_INFO("** starting the system with parameters **");

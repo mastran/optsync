@@ -260,7 +260,13 @@ struct Proposal: public Serializable {
           << *blk;
     }
 
-    inline void unserialize(DataStream &s) override;
+    inline void unserialize(DataStream &s) override {
+        assert(hsc != nullptr);
+        s >> proposer;
+        Block _blk;
+        _blk.unserialize(s, hsc);
+        blk = hsc->storage->add_blk(std::move(_blk), hsc->get_config());
+    }
 
     operator std::string () const {
         DataStream s;
@@ -428,7 +434,7 @@ struct Status: public Serializable {
             hsc(other.hsc), sender(other.sender) {}
 
     Status(Status &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
         s << hqc_blk_hash << *hqc << responsive_ancestor_blk_hash << *responsive_ancestor_qc;
     }
@@ -469,7 +475,7 @@ struct Blame: public Serializable {
 
     // A quick hack to indicate blame due to equivocation. Setting this flag makes a replica quit view immediately!
     bool equiv;
-    
+
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
 
@@ -492,7 +498,7 @@ struct Blame: public Serializable {
         hsc(other.hsc) {}
 
     Blame(Blame &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
         s << blamer << view << equiv <<*cert;
     }
@@ -536,7 +542,7 @@ struct BlameNotify: public Serializable {
     uint256_t hqc_hash;
     quorum_cert_bt hqc_qc;
     quorum_cert_bt qc;
-    
+
     /** handle of the core object to allow polymorphism */
     HotStuffCore *hsc;
 
@@ -558,7 +564,7 @@ struct BlameNotify: public Serializable {
         qc(other.qc ? other.qc->clone() : nullptr), hsc(other.hsc) {}
 
     BlameNotify(BlameNotify &&other) = default;
-    
+
     void serialize(DataStream &s) const override {
         s << view << hqc_hash << *hqc_qc << *qc;
     }
@@ -598,13 +604,6 @@ struct BlameNotify: public Serializable {
     }
 };
 
-inline void Proposal::unserialize(DataStream &s) {
-    assert(hsc != nullptr);
-    s >> proposer;
-    Block _blk;
-    _blk.unserialize(s, hsc);
-    blk = hsc->storage->add_blk(std::move(_blk), hsc->get_config());
-}
 
 struct Finality: public Serializable {
     ReplicaID rid;
@@ -652,7 +651,6 @@ struct Finality: public Serializable {
         return std::move(s);
     }
 };
-
 
 }
 

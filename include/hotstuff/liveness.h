@@ -21,6 +21,7 @@
 #include "salticidae/util.h"
 #include "hotstuff/hotstuff.h"
 
+
 namespace hotstuff {
 
 using salticidae::_1;
@@ -70,7 +71,7 @@ class PMHighTail: public virtual PaceMaker {
             b = b->get_parents()[0]);
         return b == _a;
     }
-    
+
     void reg_hqc_update() {
         hsc->async_hqc_update().then([this](const block_t &hqc) {
             for (const auto &tail: hsc->get_tails())
@@ -293,6 +294,7 @@ class PMRoundRobinProposer: virtual public PaceMaker {
                 }
                 view_change_complete();
             });
+
     }
 
     void status_complete(){
@@ -352,6 +354,7 @@ class PMRoundRobinProposer: virtual public PaceMaker {
         timer = TimerEvent(ec, [this](TimerEvent &){ rotate(); });
         timer.add(prop_delay);
     }
+
 
     /* role transitions */
 
