@@ -381,6 +381,8 @@ void HotStuffApp::start(const std::vector<std::tuple<NetAddr, bytearray_t, bytea
     impeach_timer = TimerEvent(ec, [this](TimerEvent &) {
 //        if (get_decision_waiting().size())
 //            get_pace_maker()->impeach();
+
+        reset_imp_timer();
     });
     impeach_timer.add(impeach_timeout);
     HOTSTUFF_LOG_INFO("** starting the system with parameters **");

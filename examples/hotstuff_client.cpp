@@ -113,7 +113,8 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
 
 }
 
-//#ifdef HOTSTUFF_AUTOCLI
+
+//#ifdef SYNCHS_AUTOCLI
 //void client_demand_cmd_handler(hotstuff::MsgDemandCmd &&msg, const Net::conn_t &) {
 //    for (size_t i = 0; i < msg.ncmd; i++)
 //        try_send(false);
