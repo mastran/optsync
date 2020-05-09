@@ -269,6 +269,9 @@ class HotStuffBase: public HotStuffCore {
     inline void resp_blk_handler(MsgRespBlock &&, const Net::conn_t &);
 
     inline bool conn_handler(const salticidae::ConnPool::conn_t &, bool);
+    inline promise_t verify_notify(Notify &notify);
+
+
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
         //M m(t);
@@ -364,9 +367,9 @@ class HotStuffBase: public HotStuffCore {
     PaceMaker *get_pace_maker() { return pmaker.get(); }
     void print_stat() const;
     virtual void do_elected() {}
-#ifdef SYNCHS_AUTOCLI
-    virtual void do_demand_commands(size_t) {}
-#endif
+//#ifdef SYNCHS_AUTOCLI
+ //   virtual void do_demand_commands(size_t) {}
+//#endif
 
     /* Helper functions */
     /** Returns a promise resolved (with command_t cmd) when Command is fetched. */

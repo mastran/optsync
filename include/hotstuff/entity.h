@@ -72,7 +72,7 @@ class ReplicaConfig {
     size_t nresponsive;
     double delta;
 
-    ReplicaConfig(): nreplicas(0), nmajority(0), delta(0) {}
+    ReplicaConfig(): nreplicas(0), nmajority(0), nresponsive(0), delta(0) {}
 
     void add_replica(ReplicaID rid, const ReplicaInfo &info) {
         replica_map.insert(std::make_pair(rid, info));
