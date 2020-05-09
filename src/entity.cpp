@@ -68,16 +68,12 @@ void Block::unserialize(DataStream &s, HotStuffCore *hsc) {
 }
 
 bool Block::verify(const ReplicaConfig &config) const {
-    if (qc && (!qc->verify(config) ||
-                qc->get_obj_hash() != Vote::proof_obj_hash(qc_ref_hash))) return false;
+    if (qc && !qc->verify(config)) return false;
     return true;
 }
 
 promise_t Block::verify(const ReplicaConfig &config, VeriPool &vpool) const {
-    return (qc ?
-        (qc->get_obj_hash() != Vote::proof_obj_hash(qc_ref_hash) ?
-            promise_t([](promise_t &pm) { pm.resolve(false); }) :
-            qc->verify(config, vpool)) :
+    return (qc ?  qc->verify(config, vpool) :
     promise_t([](promise_t &pm) { pm.resolve(true); }));
 }
 

@@ -588,7 +588,6 @@ void HotStuffBase::do_status(const Status &status) {
     MsgStatus m(status);
     ReplicaID next_proposer = pmaker->get_proposer();
 
-//    LOG_INFO("Sending status: %d, %s", next_proposer, std::string(status).c_str());
     if (next_proposer != get_id())
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
