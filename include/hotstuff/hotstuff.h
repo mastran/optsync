@@ -124,6 +124,27 @@ struct MsgRespBlock {
     void postponed_parse(HotStuffCore *hsc);
 };
 
+struct MsgNewPropose {
+    static const opcode_t opcode = 0x9;
+    DataStream serialized;
+    NewProposal newProposal;
+    MsgNewPropose(const NewProposal &);
+    MsgNewPropose(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgEcho {
+    static const opcode_t opcode = 0x10;
+    DataStream serialized;
+    Echo echo;
+    MsgEcho(const Echo &);
+    /** Only move the data to serialized, do not parse immediately. */
+    MsgEcho(DataStream &&s): serialized(std::move(s)) {}
+    /** Parse the serialized data to blks now, with `hsc->storage`. */
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+
 using promise::promise_t;
 
 class HotStuffBase;
@@ -240,6 +261,8 @@ class HotStuffBase: public HotStuffCore {
     inline void blamenotify_handler(MsgBlameNotify &&, const Net::conn_t &);
 
     inline void new_view_handler(MsgNewView &&, const Net::conn_t &);
+    inline void new_propose_handler(MsgNewPropose &&, const Net::conn_t &);
+    inline void echo_handler(MsgEcho &&, const Net::conn_t &);
 
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
@@ -258,9 +281,16 @@ class HotStuffBase: public HotStuffCore {
 
     void do_broadcast_proposal(const Proposal&) override;
 
+    void do_new_proposal(const ReplicaID replicaId, const NewProposal &newProp) override {
+        MsgNewPropose m(newProp);
+        pn.send_msg(m, get_config().get_addr(replicaId));
+    }
 
+    void do_broadcast_echo(const Echo &echo) override {
+        _do_broadcast<Echo, MsgEcho>(echo);
+    }
 
-        void do_broadcast_vote(const Vote &vote) override {
+    void do_broadcast_vote(const Vote &vote) override {
 #ifdef SYNCHS_NOVOTEBROADCAST
         pmaker->beat_resp(0)
                 .then([this, vote](ReplicaID proposer) {
@@ -279,9 +309,9 @@ class HotStuffBase: public HotStuffCore {
     }
 
     void do_broadcast_notify(const Notify &notify) override {
-         tcall.async_call([this, notify](salticidae::ThreadCall::Handle &){
+//         tcall.async_call([this, notify](salticidae::ThreadCall::Handle &){
              _do_broadcast<Notify, MsgNotify>(notify);
-         });
+//         });
     }
 
 

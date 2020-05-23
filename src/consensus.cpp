@@ -18,9 +18,11 @@
 #include <cassert>
 #include <stack>
 #include <cmath>
+#include <sstream>
 
 #include "hotstuff/util.h"
 #include "hotstuff/consensus.h"
+#include "hotstuff/erasure.h"
 
 #define LOG_INFO HOTSTUFF_LOG_INFO
 #define LOG_DEBUG HOTSTUFF_LOG_DEBUG
@@ -233,6 +235,30 @@ void HotStuffCore::send_new_view() {
     _vote(hqc.first);
 }
 
+void print_bytearray(bytearray_t &arr){
+    std::ostringstream ss;
+
+    for(int i= 0; i < arr.size(); i++){
+        ss << std::to_string(arr[i]) << ',';
+    }
+    std::string s = ss.str();
+
+    LOG_INFO("Data : %s", s.c_str());
+}
+
+void print_bytearray2(size_t size, uint8_t *arr){
+    std::ostringstream ss;
+
+    for(int i= 0; i < size; i++){
+        ss << std::to_string(arr[i]) << ',';
+    }
+    std::string s = ss.str();
+
+    LOG_INFO("Data : %s", s.c_str());
+}
+
+
+
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
                             const std::vector<block_t> &parents,
                             bytearray_t &&extra) {
@@ -256,17 +282,42 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     const uint256_t bnew_hash = bnew->get_hash();
     bnew->self_qc = create_quorum_cert(Vote::proof_obj_hash(bnew_hash));
     on_deliver_blk(bnew);
-    Proposal prop(id, bnew, nullptr);
     LOG_PROTO("propose %s", std::string(*bnew).c_str());
     /* self-vote */
-    if (bnew->height <= vheight)
+    if (bnew->height <= vheight) {
         throw std::runtime_error("new block should be higher than vheight");
+    }
     vheight = bnew->height;
     finished_propose[bnew] = true;
-    _vote(bnew);
+    Proposal prop(id, bnew, nullptr);
+//    _vote(bnew);
     on_propose_(prop);
     /* broadcast to other replicas */
-    do_broadcast_proposal(prop);
+//    do_broadcast_proposal(prop);
+
+    DataStream s;
+    int nreplicas = config.nreplicas;
+    int nmajority = config.nmajority;
+    int nfaulty = config.nfaulty;
+
+    bnew->serialize(s);
+
+    chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
+
+    uint256_t  blk_hash = bnew->get_hash();
+    for(int i = 0; i < nreplicas; i++) {
+        if (i != id) {
+            NewProposal np(id, blk_hash, chunk_array[i]);
+            do_new_proposal(i, np);
+        }else{
+            Echo echo(id, blk_hash, chunk_array[i]);
+            do_broadcast_echo(echo);
+        }
+    }
+    _vote(bnew);
+
+//    print_bytearray2(s.size(), s.data());
+
     return bnew;
 }
 
@@ -316,6 +367,70 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     // check if the proposal extends the highest certified block
     if (opinion && !vote_disabled) _vote(bnew);
 }
+
+void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
+    if (view_trans) return;
+    LOG_PROTO("got %s", std::string(prop).c_str());
+
+    uint256_t blk_hash = prop.blk_hash;
+    this->chunks[blk_hash][id] = prop.chunk;
+
+    //broadcast its share.
+    Echo echo(id, prop.blk_hash, prop.chunk);
+    do_broadcast_echo(echo);
+}
+
+
+void HotStuffCore::on_receive_echo(const Echo &echo) {
+    if (view_trans) return;
+    LOG_PROTO("got %s", std::string(echo).c_str());
+
+    uint256_t blk_hash = echo.blk_hash;
+    block_t blk = storage->find_blk(blk_hash);
+    if (blk != nullptr) return;
+
+    size_t nmajority = config.nmajority;
+
+    size_t qsize = this->chunks[blk_hash].size();
+    if(qsize > nmajority) return;
+    this->chunks[blk_hash][echo.proposer] = echo.chunk;
+    qsize++;
+
+    if(qsize >= nmajority){
+        chunkarray_t arr;
+        size_t nreplicas = config.nreplicas;
+        size_t nfaulty = config.nfaulty;
+        intarray_t erasures;
+
+        for(int i=0; i < (int) nreplicas; i++){
+            if (this->chunks[blk_hash][i]){
+                arr.push_back(this->chunks[blk_hash][i]);
+            }else{
+                arr.push_back(new Chunk(echo.chunk->get_blk_size(), bytearray_t (echo.chunk->get_data().size())));
+                erasures.push_back(i);
+            }
+        }
+        erasures.push_back(-1);
+
+        DataStream d;
+        Erasure::decode(nmajority, nfaulty, 8, arr, erasures, d);
+
+//        print_bytearray2(d.size(), d.data());
+        Block _block;
+        _block.unserialize(d, this);
+
+        block_t _blk = storage->add_blk(std::move(_block), config);
+        on_deliver_blk(_blk);
+
+        if(!_blk->vote_sent) {
+            _blk->vote_sent = true;
+            _vote(_blk);
+        }
+        //Todo: Send the block to every replicas by breaking it again.
+    }
+
+}
+
 
 void HotStuffCore::on_receive_vote(const Vote &vote) {
     LOG_PROTO("got %s", std::string(vote).c_str());
@@ -500,6 +615,7 @@ void HotStuffCore::on_status_timeout() {
 
 /*** end HotStuff protocol logic ***/
 void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
+    config.nfaulty = nfaulty;
     config.nmajority = config.nreplicas - nfaulty;
     config.nresponsive = (size_t) floor(3*config.nreplicas/4.0) + 1;
     LOG_INFO("Value of nmajoriry quorum, %d", config.nmajority);

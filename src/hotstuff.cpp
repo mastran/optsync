@@ -75,7 +75,7 @@ void MsgNewView::postponed_parse(HotStuffCore *hsc) {
     serialized >> status;
 }
 
-const opcode_t MsgReqBlock::opcode;
+const opcode_t  MsgReqBlock::opcode;
 MsgReqBlock::MsgReqBlock(const std::vector<uint256_t> &blk_hashes) {
     serialized << htole((uint32_t)blk_hashes.size());
     for (const auto &h: blk_hashes)
@@ -107,6 +107,18 @@ void MsgRespBlock::postponed_parse(HotStuffCore *hsc) {
         _blk.unserialize(serialized, hsc);
         blk = hsc->storage->add_blk(std::move(_blk), hsc->get_config());
     }
+}
+
+const opcode_t MsgNewPropose::opcode;
+MsgNewPropose::MsgNewPropose(const NewProposal &newProposal) {serialized << newProposal;}
+void MsgNewPropose::postponed_parse(HotStuffCore *hsc) {
+    serialized >> newProposal;
+}
+
+const opcode_t MsgEcho::opcode;
+MsgEcho::MsgEcho(const Echo &echo) { serialized << echo; }
+void MsgEcho::postponed_parse(HotStuffCore *hsc) {
+    serialized >> echo;
 }
 
 // TODO: improve this function
@@ -208,21 +220,21 @@ promise_t HotStuffBase::async_deliver_blk(const uint256_t &blk_hash,
     BlockDeliveryContext pm{[](promise_t){}};
     it = blk_delivery_waiting.insert(std::make_pair(blk_hash, pm)).first;
     /* otherwise the on_deliver_batch will resolve */
-    async_fetch_blk(blk_hash, &replica_id).then([this, replica_id](block_t blk) {
-        /* qc_ref should be fetched */
-        std::vector<promise_t> pms;
-        const auto &qc = blk->get_qc();
-        if (qc)
-            pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
-        /* the parents should be delivered */
-        for (const auto &phash: blk->get_parent_hashes())
-            pms.push_back(async_deliver_blk(phash, replica_id));
-        if (blk != get_genesis())
-            pms.push_back(blk->verify(get_config(), vpool));
-        promise::all(pms).then([this, blk]() {
-            on_deliver_blk(blk);
-        });
-    });
+//    async_fetch_blk(blk_hash, &replica_id).then([this, replica_id](block_t blk) {
+//        /* qc_ref should be fetched */
+//        std::vector<promise_t> pms;
+//        const auto &qc = blk->get_qc();
+//        if (qc)
+//            pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
+//        /* the parents should be delivered */
+//        for (const auto &phash: blk->get_parent_hashes())
+//            pms.push_back(async_deliver_blk(phash, replica_id));
+//        if (blk != get_genesis())
+//            pms.push_back(blk->verify(get_config(), vpool));
+//        promise::all(pms).then([this, blk]() {
+//            on_deliver_blk(blk);
+//        });
+//    });
     return static_cast<promise_t &>(pm);
 }
 
@@ -327,7 +339,7 @@ void HotStuffBase::blamenotify_handler(MsgBlameNotify &&msg, const Net::conn_t &
     });
 }
 
-void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_t &conn) {
+void HotStuffBase::new_view_handler(MsgNewView &&msg, const Net::conn_t &conn) {
     const NetAddr &peer = conn->get_peer();
     if (peer.is_null()) return;
     msg.postponed_parse(this);
@@ -343,6 +355,27 @@ void HotStuffBase::new_view_handler(hotstuff::MsgNewView &&msg, const Net::conn_
     });
 
 }
+
+void HotStuffBase::new_propose_handler(MsgNewPropose &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    msg.postponed_parse(this);
+    auto &newProp = msg.newProposal;
+
+    //Todo: add verification of the chunk
+
+    on_receive_new_proposal(newProp);
+}
+
+void HotStuffBase::echo_handler(MsgEcho &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    msg.postponed_parse(this);
+    auto &echo = msg.echo;
+
+    //Todo: add verification of the chunk
+
+    on_receive_echo(echo);
+}
+
 
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
@@ -386,7 +419,8 @@ void HotStuffBase::reset_blame_timer(double t_sec){
 
 void HotStuffBase::set_viewtrans_timer(double t_sec) {
     viewtrans_timer = TimerEvent(ec, [this](TimerEvent &) {
-        on_viewtrans_timeout();
+        //Todo: remove this comment.
+  //      on_viewtrans_timeout();
         stop_viewtrans_timer();
     });
     viewtrans_timer.add(t_sec);
@@ -532,6 +566,8 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::req_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::resp_blk_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_view_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_propose_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::echo_handler, this, _1, _2));
     pn.start();
     pn.listen(listen_addr);
 }

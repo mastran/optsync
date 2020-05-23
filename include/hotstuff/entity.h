@@ -68,11 +68,12 @@ class ReplicaConfig {
 
     public:
     size_t nreplicas;
+    size_t nfaulty;
     size_t nmajority;
     size_t nresponsive;
     double delta;
 
-    ReplicaConfig(): nreplicas(0), nmajority(0), nresponsive(0), delta(0) {}
+    ReplicaConfig(): nreplicas(0), nfaulty(0), nmajority(0), nresponsive(0), delta(0) {}
 
     void add_replica(ReplicaID rid, const ReplicaInfo &info) {
         replica_map.insert(std::make_pair(rid, info));
@@ -146,6 +147,7 @@ class Block {
     bool delivered;
     int8_t decision;
 
+    bool vote_sent;
     std::unordered_set<ReplicaID> voted;
 
     public:

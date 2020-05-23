@@ -26,6 +26,7 @@
 #include "hotstuff/type.h"
 #include "hotstuff/entity.h"
 #include "hotstuff/crypto.h"
+#include "hotstuff/erasure.h"
 
 namespace hotstuff {
 
@@ -36,8 +37,8 @@ struct Blame;
 struct BlameNotify;
 struct Finality;
 struct Notify;
-
-
+struct NewProposal;
+struct Echo;
 
 
 /** Abstraction for HotStuff protocol state machine (without network implementation). */
@@ -74,6 +75,9 @@ class HotStuffCore {
     /* == feature switches == */
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
+
+    /*Erasure Coded Chunks by height*/
+    std::unordered_map<uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;
 
     block_t get_delivered_blk(const uint256_t &blk_hash);
     void sanity_check_delivered(const block_t &blk);
@@ -135,6 +139,9 @@ class HotStuffCore {
     void on_viewtrans_timeout();
     void on_status_timeout();
 
+    void on_receive_new_proposal(const NewProposal &prop);
+    void on_receive_echo(const Echo &echo);
+
     void send_new_view();
 
     /** Call to submit new commands to be decided (executed). "Parents" must
@@ -164,6 +171,8 @@ class HotStuffCore {
     virtual void do_broadcast_blamenotify(const BlameNotify &bn) = 0;
     virtual void do_status(const Status &status) = 0;
     virtual void do_broadcast_new_view(const Status &status)=0;
+    virtual void do_broadcast_echo(const Echo &echo)=0;
+    virtual void do_new_proposal(ReplicaID replicaId, const NewProposal &newProp) = 0;
 
     virtual void set_commit_timer(const block_t &blk, double t_sec) = 0;
     virtual void set_blame_timer(double t_sec) = 0;
@@ -643,6 +652,91 @@ struct Finality: public Serializable {
           << "cmd_idx=" << std::to_string(cmd_idx) << " "
           << "cmd_height=" << std::to_string(cmd_height) << " "
           << "cmd=" << get_hex10(cmd_hash) << " "
+          << "blk=" << get_hex10(blk_hash) << ">";
+        return std::move(s);
+    }
+};
+
+/** Abstraction for new proposal for erasure coding. */
+struct NewProposal: public Serializable {
+    ReplicaID proposer;
+
+    uint256_t blk_hash;
+    /** chunk being proposed */
+    chunk_t chunk;
+
+    NewProposal(): chunk(nullptr) {}
+    NewProposal(ReplicaID proposer,
+                uint256_t blk_hash,
+               const chunk_t &chunk):
+               proposer(proposer),
+               blk_hash(blk_hash),
+               chunk(chunk) {}
+
+    NewProposal(const NewProposal &other):
+            proposer(other.proposer),
+            blk_hash(other.blk_hash),
+            chunk(other.chunk) {}
+
+    void serialize(DataStream &s) const override {
+        s << proposer << blk_hash << *chunk;
+    }
+
+    inline void unserialize(DataStream &s) override {
+        s >> proposer;
+        s >> blk_hash;
+
+        Chunk _chunk;
+        s >> _chunk;
+        chunk = new Chunk(std::move(_chunk));
+    }
+
+    operator std::string () const {
+        DataStream s;
+        s << "<new-proposal "
+          << "rid=" << std::to_string(proposer) << " "
+          << "blk=" << get_hex10(blk_hash) << ">";
+        return std::move(s);
+    }
+};
+
+struct Echo: public Serializable {
+    ReplicaID proposer;
+
+    uint256_t blk_hash;
+    /** chunk being proposed */
+    chunk_t chunk;
+
+    Echo(): chunk(nullptr) {}
+    Echo(ReplicaID proposer,
+         uint256_t blk_hash,
+         const chunk_t &chunk):
+            proposer(proposer),
+            blk_hash(blk_hash),
+            chunk(chunk) {}
+
+    Echo(const Echo &other):
+            proposer(other.proposer),
+            blk_hash(other.blk_hash),
+            chunk(other.chunk) {}
+
+    void serialize(DataStream &s) const override {
+        s << proposer << blk_hash << *chunk;
+    }
+
+    inline void unserialize(DataStream &s) override {
+        s >> proposer;
+        s >> blk_hash;
+
+        Chunk _chunk;
+        s >> _chunk;
+        chunk = new Chunk(std::move(_chunk));
+    }
+
+    operator std::string () const {
+        DataStream s;
+        s << "<echo "
+          << "rid=" << std::to_string(proposer) << " "
           << "blk=" << get_hex10(blk_hash) << ">";
         return std::move(s);
     }
