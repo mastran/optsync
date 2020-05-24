@@ -21,6 +21,7 @@
 #include <cassert>
 #include <set>
 #include <unordered_map>
+#include <mutex>
 
 #include "hotstuff/promise.hpp"
 #include "hotstuff/type.h"
@@ -43,6 +44,8 @@ struct Echo;
 
 /** Abstraction for HotStuff protocol state machine (without network implementation). */
 class HotStuffCore {
+    std::mutex mu;
+
     block_t b0;                                  /** the genesis block */
     /* === state variables === */
     /** block containing the QC for the highest block having one */
@@ -77,7 +80,7 @@ class HotStuffCore {
     bool vote_disabled;
 
     /*Erasure Coded Chunks by height*/
-    std::unordered_map<uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;
+    std::unordered_map<const uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;
 
     block_t get_delivered_blk(const uint256_t &blk_hash);
     void sanity_check_delivered(const block_t &blk);
@@ -143,6 +146,8 @@ class HotStuffCore {
     void on_receive_echo(const Echo &echo);
 
     void send_new_view();
+    void insert_chunk(uint256_t blk_hash, ReplicaID replicaId, const chunk_t &);
+    size_t chunk_size(uint256_t blk_hash);
 
     /** Call to submit new commands to be decided (executed). "Parents" must
      * contain at least one block, and the first block is the actual parent,

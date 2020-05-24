@@ -365,7 +365,7 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     finished_propose[bnew] = true;
     on_receive_proposal_(prop);
     // check if the proposal extends the highest certified block
-    if (opinion && !vote_disabled) _vote(bnew);
+//    if (opinion && !vote_disabled) _vote(bnew);
 }
 
 void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
@@ -380,6 +380,15 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
     do_broadcast_echo(echo);
 }
 
+void HotStuffCore::insert_chunk(const uint256_t blk_hash, const ReplicaID replicaId, const chunk_t &chunk){
+    const std::lock_guard<std::mutex> lock(mu);
+    this->chunks[blk_hash][replicaId] = chunk;
+}
+
+size_t HotStuffCore::chunk_size(const uint256_t blk_hash){
+    const std::lock_guard<std::mutex> lock(mu);
+    return this->chunks[blk_hash].size();
+}
 
 void HotStuffCore::on_receive_echo(const Echo &echo) {
     if (view_trans) return;
@@ -391,9 +400,9 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
 
     size_t nmajority = config.nmajority;
 
-    size_t qsize = this->chunks[blk_hash].size();
+    size_t qsize = chunk_size(blk_hash);
     if(qsize > nmajority) return;
-    this->chunks[blk_hash][echo.proposer] = echo.chunk;
+    insert_chunk(blk_hash, echo.proposer, echo.chunk);
     qsize++;
 
     if(qsize >= nmajority){
