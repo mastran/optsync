@@ -46,6 +46,8 @@ add_dependencies(secp256k1 libsecp256k1)
 
 include_directories(./)
 include_directories(include)
+include_directories(/usr/local/include/jerasure)
+
 add_library(hotstuff
     OBJECT
     src/util.cpp
@@ -54,6 +56,7 @@ add_library(hotstuff
     src/entity.cpp
     src/consensus.cpp
     src/hotstuff.cpp
+    src/erasure.cpp
     )
 
 option(BUILD_SHARED "build shared library." OFF)
@@ -61,11 +64,11 @@ if(BUILD_SHARED)
     set_property(TARGET hotstuff PROPERTY POSITION_INDEPENDENT_CODE 1)
     add_library(hotstuff_shared SHARED $<TARGET_OBJECTS:hotstuff>)
     set_target_properties(hotstuff_shared PROPERTIES OUTPUT_NAME "hotstuff")
-    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto Jerasure ${CMAKE_THREAD_LIBS_INIT})
 endif()
 add_library(hotstuff_static STATIC $<TARGET_OBJECTS:hotstuff>)
 set_target_properties(hotstuff_static PROPERTIES OUTPUT_NAME "hotstuff")
-target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto Jerasure ${CMAKE_THREAD_LIBS_INIT})
 
 add_subdirectory(test)
 
@@ -75,7 +78,7 @@ endif()
 
 option(HOTSTUFF_DEBUG_LOG "enable debug log" OFF)
 option(HOTSTUFF_NORMAL_LOG "enable normal log" ON)
-option(HOTSTUFF_PROTO_LOG "enable protocol log" OFF)
+option(HOTSTUFF_PROTO_LOG "enable protocol log" ON)
 option(HOTSTUFF_MSG_STAT "eanble message statistics" ON)
 option(HOTSTUFF_BLK_PROFILE "enable block profiling" OFF)
 option(HOTSTUFF_TWO_STEP "use two-step HotStuff (instead of three-step HS)" OFF)
@@ -95,6 +98,8 @@ target_link_libraries(hotstuff-client hotstuff_static)
 add_executable(hotstuff-keygen
     src/hotstuff_keygen.cpp)
 target_link_libraries(hotstuff-keygen hotstuff_static)
+
+
 
 find_package(Doxygen)
 if (DOXYGEN_FOUND)
