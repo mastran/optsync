@@ -235,7 +235,7 @@ void HotStuffCore::send_new_view() {
     _vote(hqc.first);
 }
 
-void print_bytearray(bytearray_t &arr){
+void print_bytearray(const uint256_t &blk_hash, int idx, bytearray_t &arr){
     std::ostringstream ss;
 
     for(int i= 0; i < arr.size(); i++){
@@ -243,7 +243,7 @@ void print_bytearray(bytearray_t &arr){
     }
     std::string s = ss.str();
 
-    LOG_INFO("Data : %s", s.c_str());
+    LOG_INFO("Data %s %d: %s", get_hex10(blk_hash).c_str(), idx, s.c_str());
 }
 
 void print_bytearray2(size_t size, uint8_t *arr){
@@ -254,10 +254,24 @@ void print_bytearray2(size_t size, uint8_t *arr){
     }
     std::string s = ss.str();
 
-    LOG_INFO("Data : %s", s.c_str());
+    LOG_INFO("Datastream : %s", s.c_str());
 }
 
+void HotStuffCore::on_encode_complete(const uint256_t &blk_hash, chunkarray_t &chunk_array, bool do_echo){
+    for(int i = 0; i < config.nreplicas; i++) {
+        print_bytearray(blk_hash, i, chunk_array[i]->get_data());
 
+        if (i != id) {
+            NewProposal np(id, blk_hash, chunk_array[i]);
+            do_new_proposal(i, np);
+        }else{
+            if (do_echo) {
+                Echo echo(id, blk_hash, chunk_array[i]);
+                do_broadcast_echo(echo);
+            }
+        }
+    }
+}
 
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
                             const std::vector<block_t> &parents,
@@ -302,10 +316,16 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 
     bnew->serialize(s);
 
-    chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
+//    print_bytearray2(s.size(), s.data());
 
-    uint256_t  blk_hash = bnew->get_hash();
+    uint256_t blk_hash = bnew->get_hash();
+
+//    encode(nmajority, nfaulty, 8, s, blk_hash, true);
+
+    chunkarray_t chunk_array = Erasure::encode(3, 2, 8, s);
+
     for(int i = 0; i < nreplicas; i++) {
+//        print_bytearray(chunk_array[i]->get_data());
         if (i != id) {
             NewProposal np(id, blk_hash, chunk_array[i]);
             do_new_proposal(i, np);
@@ -314,10 +334,8 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
             do_broadcast_echo(echo);
         }
     }
+
     _vote(bnew);
-
-//    print_bytearray2(s.size(), s.data());
-
     return bnew;
 }
 
@@ -414,6 +432,7 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         for(int i=0; i < (int) nreplicas; i++){
             if (this->chunks[blk_hash][i]){
                 arr.push_back(this->chunks[blk_hash][i]);
+                LOG_INFO("Blk_hash :%s, Chunk num %d", get_hex10(blk_hash).c_str(), i);
             }else{
                 arr.push_back(new Chunk(echo.chunk->get_blk_size(), bytearray_t (echo.chunk->get_data().size())));
                 erasures.push_back(i);
@@ -424,20 +443,19 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         DataStream d;
         Erasure::decode(nmajority, nfaulty, 8, arr, erasures, d);
 
-//        print_bytearray2(d.size(), d.data());
+        print_bytearray2(d.size(), d.data());
         Block _block;
         _block.unserialize(d, this);
 
         block_t _blk = storage->add_blk(std::move(_block), config);
         on_deliver_blk(_blk);
 
-        if(!_blk->vote_sent) {
-            _blk->vote_sent = true;
-            _vote(_blk);
-        }
-        //Todo: Send the block to every replicas by breaking it again.
-    }
+        _vote(_blk);
 
+        DataStream s;
+        _blk->serialize(s);
+//        encode(nmajority, nfaulty, 8, s, blk_hash, false);
+    }
 }
 
 

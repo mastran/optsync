@@ -17,6 +17,7 @@
 
 #include "hotstuff/hotstuff.h"
 #include "hotstuff/client.h"
+#include "hotstuff/erasure.h"
 
 using salticidae::static_pointer_cast;
 
@@ -602,6 +603,114 @@ void HotStuffBase::do_status(const Status &status) {
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
         on_receive_status(status);
+}
+
+void HotStuffBase::encode(int k, int m, int w, DataStream &s, const uint256_t &blk_hash, bool do_echo){
+
+    uint32_t size = s.size();
+    int *matrix;
+    char **data, **coding;
+    int i, blocksize, extra = 0, newsize;
+
+    int x = (int) size / (k * w * sizeof(long));
+    if (size >  x * k * w * (int) sizeof(long))
+        x += 1;
+
+    newsize = x * k * w * (int) sizeof(long);
+    // blocksize must be multiple of sizeof(long)
+    blocksize = newsize / k ;
+
+    extra = newsize - size;
+
+    for(i=0; i< extra; i++)
+        s << '0';
+
+    char *block = reinterpret_cast<char *>(s.data());
+    RcObj<chunkarray_t > chunks(new chunkarray_t);
+
+    data = (char **) malloc(sizeof(char*) * k);
+    coding = (char **) malloc(sizeof(char *) * m);
+
+    for (i = 0; i < m; i++)
+        coding[i] = (char *)malloc(sizeof(char)*blocksize);
+
+    for (i = 0; i < k; i++) {
+        data[i] = block + (i * blocksize);
+        bytearray_t bt(data[i], data[i]+blocksize);
+        chunks->push_back(new Chunk(size, std::move(bt)));
+    }
+
+    matrix = reed_sol_vandermonde_coding_matrix(k, m, w);
+
+    std::vector<promise_t> vpm;
+    for (i = 0; i < m; i++){
+        vpm.push_back(vpool.verify(new EncodeTask(k, w, matrix+(i*k), k+i, data, coding, blocksize)));
+    }
+
+    promise::all(vpm).then([this, m, size, chunks, blk_hash, do_echo](const promise::values_t &values) {
+
+
+        for(int i=0; i<m; i++) {
+            auto v = values[i];
+//            bytearray_t bt([i], coding[i]+blocksize);
+//            chunks->push_back(new Chunk(size, std::move(values[])));
+        }
+
+        on_encode_complete(blk_hash, *chunks, do_echo);
+    });
+}
+
+void HotStuffBase::decode(const int k, const int m, const int w, const chunkarray_t &chunks, intarray_t &erasures){
+    size_t size = chunks[0]->get_blk_size();
+    int *matrix;
+    char **data, **coding;
+    int i, blocksize, extra = 0;
+    int *_erasures = erasures.data();
+
+    int x = (int) size / (k * sizeof(long));
+    if (size >  x * k * (int) sizeof(long))
+        x += 1;
+
+//         blocksize must be multiple of sizeof(long)
+    blocksize = x * sizeof(long) ;
+
+    data = (char **) malloc(sizeof(char*) * k);
+    coding = (char **) malloc(sizeof(char *) * m);
+
+    for(i=0; i<k; i++)
+        data[i] = (char *)chunks[i]->get_data().data();
+
+    for(i=0; i<m; i++)
+        coding[i] = (char *)chunks[k+i]->get_data().data();
+
+    matrix = reed_sol_vandermonde_coding_matrix(k, m, w);
+
+    int * dm_ids = (int *)malloc(sizeof(int) * k);
+    int * decoding_matrix = (int *)malloc(sizeof(int) * k * k);
+    jerasure_make_decoding_matrix(k, m, w, matrix, _erasures, decoding_matrix, dm_ids);
+
+
+    std::vector<promise_t> vpm;
+    for (i = 0; i < m; i++){
+        //Todo: check this!
+        vpm.push_back(vpool.verify(new DecodeTask(k, w, decoding_matrix+(i*k), dm_ids, i,data, coding, blocksize)));
+    }
+
+    promise::all(vpm).then([k, m, size, data, coding, blocksize, this](const promise::values_t &values) {
+        DataStream s;
+        int i, extra;
+        for(i=0; i<k-1; i++) {
+            bytearray_t arr(data[i], data[i]+blocksize);
+            s << arr;
+        }
+
+        extra = blocksize * k - size;
+        bytearray_t arr(data[i], data[i]+blocksize-extra);
+        s << arr;
+
+//        on_decode_complete(s);
+    });
+
 }
 
 HotStuffBase::~HotStuffBase() {}

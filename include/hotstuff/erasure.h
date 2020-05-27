@@ -53,22 +53,65 @@ class Chunk {
 };
 
 
+
+class EncodeTask: public VeriTask {
+    int k;
+    int w;
+    int *matrix;
+    int i;
+    char** data;
+    char** coding;
+    int blocksize;
+
+    public:
+    EncodeTask(int k, int w, int *matrix, int i, char **data, char **coding, int blocksize):
+            k(k), w(w), matrix(matrix), i(i), data(data), coding(coding), blocksize(blocksize) {}
+    virtual ~EncodeTask() = default;
+
+    bool verify() override {
+        jerasure_matrix_dotprod(k, w, matrix, NULL, i, data, coding, blocksize);
+        return true;
+    }
+};
+
+class DecodeTask: public VeriTask {
+    int k;
+    int w;
+    int *matrix;
+    int *src_ids;
+    int dest_id;
+    char** data;
+    char** coding;
+    int blocksize;
+
+public:
+    DecodeTask(int k, int w, int *matrix, int* src_ids, int dest_id, char **data, char **coding, int blocksize):
+            k(k), w(w), matrix(matrix), src_ids(src_ids), dest_id(dest_id), data(data), coding(coding), blocksize(blocksize) {}
+    virtual ~DecodeTask() = default;
+
+    bool verify() override {
+        return true;
+    }
+};
+
+
 class Erasure {
     public:
     static chunkarray_t encode(int k, int m, int w, DataStream &s){
         uint32_t size = s.size();
         int *matrix;
         char **data, **coding;
-        int i, blocksize, extra = 0;
+        int i, blocksize, extra = 0, newsize;
 
-        int x = (int) size / (k * sizeof(long));
-        if (size >  x * k * (int) sizeof(long))
+        int x = (int) size / (k * w * sizeof(long));
+        if (size >  x * k * w * (int) sizeof(long))
             x += 1;
 
+        newsize = x * k * w * (int) sizeof(long);
         // blocksize must be multiple of sizeof(long)
-        blocksize = x * sizeof(long) ;
+        blocksize = newsize / k ;
 
-        extra = blocksize * k - size;
+        extra = newsize - size;
 
         for(i=0; i< extra; i++)
             s << '0';
@@ -85,8 +128,8 @@ class Erasure {
             data[i] = block+(i*blocksize);
 
         matrix = reed_sol_vandermonde_coding_matrix(k, m, w);
-        jerasure_matrix_encode(k, m, w, matrix, data, coding, blocksize);
 
+        jerasure_matrix_encode(k, m, w, matrix, data, coding, blocksize);
         chunkarray_t chunks;
 
         for(i=0; i<k; i++) {
@@ -106,15 +149,16 @@ class Erasure {
         size_t size = chunks[0]->get_blk_size();
         int *matrix;
         char **data, **coding;
-        int i, blocksize, extra = 0;
+        int i, blocksize, extra = 0, newsize;
         int *_erasures = erasures.data();
 
-        int x = (int) size / (k * sizeof(long));
-        if (size >  x * k * (int) sizeof(long))
+        int x = (int) size / (k * w * sizeof(long));
+        if (size >  x * k * w * (int) sizeof(long))
             x += 1;
 
-//         blocksize must be multiple of sizeof(long)
-        blocksize = x * sizeof(long) ;
+        newsize = x * k * w * (int) sizeof(long);
+        // blocksize must be multiple of sizeof(long)
+        blocksize = newsize / k ;
 
         data = (char **) malloc(sizeof(char*) * k);
         coding = (char **) malloc(sizeof(char *) * m);
@@ -136,12 +180,14 @@ class Erasure {
             s << arr;
         }
 
-        extra = blocksize * k - size;
+        extra = newsize - size;
         bytearray_t arr(data[i], data[i]+blocksize-extra);
         s << arr;
         return true;
     }
 };
+
+
 
 }
 

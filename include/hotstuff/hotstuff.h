@@ -271,6 +271,9 @@ class HotStuffBase: public HotStuffCore {
 
     inline promise_t verify_notify(Notify &notify);
 
+    void encode(int k, int m, int w, DataStream &s, const uint256_t &blk_hash, bool do_echo) override ;
+    void decode(const int k, const int m, const int w, const chunkarray_t &chunks, intarray_t &erasures) override ;
+
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
         //M m(t);

@@ -22,4 +22,5 @@ namespace hotstuff {
             data = bytearray_t(base, base+n);
         }
     }
+
 }

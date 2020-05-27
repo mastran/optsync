@@ -147,7 +147,6 @@ class Block {
     bool delivered;
     int8_t decision;
 
-    bool vote_sent;
     std::unordered_set<ReplicaID> voted;
 
     public:
