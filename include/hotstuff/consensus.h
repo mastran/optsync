@@ -146,13 +146,17 @@ class HotStuffCore {
     void on_receive_echo(const Echo &echo);
 
     void send_new_view();
-    void insert_chunk(uint256_t blk_hash, ReplicaID replicaId, const chunk_t &);
+    bool insert_chunk(uint256_t blk_hash, ReplicaID replicaId, const chunk_t &);
     size_t chunk_size(uint256_t blk_hash);
 
     virtual void encode(int k, int m, int w, DataStream &s, const uint256_t &blk_hash, bool do_echo=false) = 0;
     void on_encode_complete(const uint256_t &blk_hash, chunkarray_t &chunk_array, bool do_echo=false);
     virtual void decode(const int k, const int m, const int w, const chunkarray_t &chunks, intarray_t &erasures) = 0;
     void on_decode_complete(DataStream &s);
+
+    virtual void block_fetched(const block_t &blk, const ReplicaID replicaId) = 0;
+    void do_vote(const block_t &blk);
+
 
     /** Call to submit new commands to be decided (executed). "Parents" must
      * contain at least one block, and the first block is the actual parent,

@@ -56,21 +56,31 @@ class Chunk {
 
 class EncodeTask: public VeriTask {
     int k;
+    int m;
     int w;
     int *matrix;
     int i;
     char** data;
     char** coding;
+    std::shared_ptr<std::vector<bytearray_t>> coding_results;
     int blocksize;
 
     public:
-    EncodeTask(int k, int w, int *matrix, int i, char **data, char **coding, int blocksize):
-            k(k), w(w), matrix(matrix), i(i), data(data), coding(coding), blocksize(blocksize) {}
+    EncodeTask(int k, int m, int w, int *matrix, int i, char **data, std::shared_ptr<std::vector<bytearray_t>> coding_results, int blocksize):
+            k(k), m(m), w(w), matrix(matrix), i(i), data(data), coding_results(coding_results), blocksize(blocksize) {}
     virtual ~EncodeTask() = default;
 
     bool verify() override {
-        jerasure_matrix_dotprod(k, w, matrix, NULL, i, data, coding, blocksize);
-        return true;
+
+    coding = (char **) malloc(sizeof(char *) * m);
+    for (int j = 0; j < m; j++)
+        coding[j] = (char *)malloc(sizeof(char)*blocksize);
+
+    jerasure_matrix_dotprod(k, w, matrix+(i*k), NULL, k+i, data, coding, blocksize);
+
+    bytearray_t bt(coding[i], coding[i]+blocksize);
+    (*coding_results)[i] = bt;
+    return true;
     }
 };
 

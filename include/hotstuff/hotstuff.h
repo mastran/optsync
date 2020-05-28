@@ -273,6 +273,7 @@ class HotStuffBase: public HotStuffCore {
 
     void encode(int k, int m, int w, DataStream &s, const uint256_t &blk_hash, bool do_echo) override ;
     void decode(const int k, const int m, const int w, const chunkarray_t &chunks, intarray_t &erasures) override ;
+    void block_fetched(const block_t &blk, const ReplicaID replicaId) override;
 
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
@@ -497,7 +498,7 @@ FetchContext<ent_type>::FetchContext(
 template<EntityType ent_type>
 void FetchContext<ent_type>::send(const NetAddr &replica_id) {
     hs->part_fetched_replica[replica_id]++;
-    hs->pn.send_msg(fetch_msg, replica_id);
+//    hs->pn.send_msg(fetch_msg, replica_id);
 }
 
 template<EntityType ent_type>

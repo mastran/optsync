@@ -56,16 +56,17 @@ void HotStuffCore::sanity_check_delivered(const block_t &blk) {
 
 block_t HotStuffCore::get_delivered_blk(const uint256_t &blk_hash) {
     block_t blk = storage->find_blk(blk_hash);
-    if (blk == nullptr || !blk->delivered)
+    if (blk == nullptr || !blk->delivered) {
         throw std::runtime_error("block not delivered");
+    }
     return std::move(blk);
 }
 
 bool HotStuffCore::on_deliver_blk(const block_t &blk) {
     if (blk->delivered)
     {
-        LOG_WARN("attempt to deliver a block twice");
-        return false;
+//        LOG_WARN("attempt to deliver a block twice");
+        return true;
     }
     blk->parents.clear();
     for (const auto &hash: blk->parent_hashes)
@@ -157,6 +158,10 @@ void HotStuffCore::_vote(const block_t &blk) {
     do_broadcast_vote(vote);
     set_commit_timer(blk, 2 * config.delta);
     //set_blame_timer(3 * config.delta);
+}
+
+void HotStuffCore::do_vote(const block_t &blk) {
+    _vote(blk);
 }
 
 
@@ -325,7 +330,6 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     chunkarray_t chunk_array = Erasure::encode(3, 2, 8, s);
 
     for(int i = 0; i < nreplicas; i++) {
-//        print_bytearray(chunk_array[i]->get_data());
         if (i != id) {
             NewProposal np(id, blk_hash, chunk_array[i]);
             do_new_proposal(i, np);
@@ -398,9 +402,13 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
     do_broadcast_echo(echo);
 }
 
-void HotStuffCore::insert_chunk(const uint256_t blk_hash, const ReplicaID replicaId, const chunk_t &chunk){
+bool HotStuffCore::insert_chunk(const uint256_t blk_hash, const ReplicaID replicaId, const chunk_t &chunk){
     const std::lock_guard<std::mutex> lock(mu);
-    this->chunks[blk_hash][replicaId] = chunk;
+    if (!this->chunks[blk_hash][replicaId]) {
+        this->chunks[blk_hash][replicaId] = chunk;
+        return true;
+    }
+    return false;
 }
 
 size_t HotStuffCore::chunk_size(const uint256_t blk_hash){
@@ -420,8 +428,7 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
 
     size_t qsize = chunk_size(blk_hash);
     if(qsize > nmajority) return;
-    insert_chunk(blk_hash, echo.proposer, echo.chunk);
-    qsize++;
+    if (insert_chunk(blk_hash, echo.proposer, echo.chunk)) qsize++;
 
     if(qsize >= nmajority){
         chunkarray_t arr;
@@ -432,7 +439,7 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         for(int i=0; i < (int) nreplicas; i++){
             if (this->chunks[blk_hash][i]){
                 arr.push_back(this->chunks[blk_hash][i]);
-                LOG_INFO("Blk_hash :%s, Chunk num %d", get_hex10(blk_hash).c_str(), i);
+//                LOG_INFO("Blk_hash :%s, Chunk num %d", get_hex10(blk_hash).c_str(), i);
             }else{
                 arr.push_back(new Chunk(echo.chunk->get_blk_size(), bytearray_t (echo.chunk->get_data().size())));
                 erasures.push_back(i);
@@ -443,18 +450,28 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         DataStream d;
         Erasure::decode(nmajority, nfaulty, 8, arr, erasures, d);
 
-        print_bytearray2(d.size(), d.data());
+//        print_bytearray2(d.size(), d.data());
         Block _block;
         _block.unserialize(d, this);
 
         block_t _blk = storage->add_blk(std::move(_block), config);
-        on_deliver_blk(_blk);
 
-        _vote(_blk);
+//        on_deliver_blk(_blk);
+        block_fetched(_blk, echo.proposer);
+
+//        _vote(_blk);
 
         DataStream s;
         _blk->serialize(s);
-//        encode(nmajority, nfaulty, 8, s, blk_hash, false);
+
+        chunkarray_t chunk_array = Erasure::encode(3, 2, 8, s);
+        for(int i = 0; i < nreplicas; i++) {
+            if (i != id) {
+                NewProposal np(id, blk_hash, chunk_array[i]);
+                do_new_proposal(i, np);
+            }
+        }
+
     }
 }
 

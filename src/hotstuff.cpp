@@ -221,21 +221,21 @@ promise_t HotStuffBase::async_deliver_blk(const uint256_t &blk_hash,
     BlockDeliveryContext pm{[](promise_t){}};
     it = blk_delivery_waiting.insert(std::make_pair(blk_hash, pm)).first;
     /* otherwise the on_deliver_batch will resolve */
-//    async_fetch_blk(blk_hash, &replica_id).then([this, replica_id](block_t blk) {
-//        /* qc_ref should be fetched */
-//        std::vector<promise_t> pms;
-//        const auto &qc = blk->get_qc();
-//        if (qc)
-//            pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
-//        /* the parents should be delivered */
-//        for (const auto &phash: blk->get_parent_hashes())
-//            pms.push_back(async_deliver_blk(phash, replica_id));
-//        if (blk != get_genesis())
-//            pms.push_back(blk->verify(get_config(), vpool));
-//        promise::all(pms).then([this, blk]() {
-//            on_deliver_blk(blk);
-//        });
-//    });
+    async_fetch_blk(blk_hash, &replica_id).then([this, replica_id](block_t blk) {
+        /* qc_ref should be fetched */
+        std::vector<promise_t> pms;
+        const auto &qc = blk->get_qc();
+        if (qc)
+            pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
+        /* the parents should be delivered */
+        for (const auto &phash: blk->get_parent_hashes())
+            pms.push_back(async_deliver_blk(phash, replica_id));
+        if (blk != get_genesis())
+            pms.push_back(blk->verify(get_config(), vpool));
+        promise::all(pms).then([this, blk]() {
+            on_deliver_blk(blk);
+        });
+    });
     return static_cast<promise_t &>(pm);
 }
 
@@ -270,7 +270,7 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
 
 promise_t HotStuffBase::verify_notify(Notify &notify){
     block_t blk = storage->find_blk(notify.blk_hash);
-    if(blk->get_decision() == 1){
+    if(blk != nullptr && blk->get_decision() == 1){
         promise_t pm;
         return pm.then([]{ return true;});
     }
@@ -283,15 +283,15 @@ void HotStuffBase::notify_handler(MsgNotify &&msg, const Net::conn_t &conn){
     msg.postponed_parse(this);
 
     RcObj<Notify> n(new Notify(std::move(msg.notify)));
-        promise::all(std::vector<promise_t>{
-                async_deliver_blk(n->blk_hash, peer),
-                verify_notify(*n)
-        }).then([this, n, peer](const promise::values_t values) {
-            if (!promise::any_cast<bool>(values[1]))
-                LOG_WARN("invalid notify from %s", std::string(peer).c_str());
-            else
-                on_receive_notify(*n);
-        });
+    promise::all(std::vector<promise_t>{
+            async_deliver_blk(n->blk_hash, peer),
+            verify_notify(*n)
+    }).then([this, n, peer](const promise::values_t values) {
+        if (!promise::any_cast<bool>(values[1]))
+            LOG_WARN("invalid notify from %s", std::string(peer).c_str());
+        else
+            on_receive_notify(*n);
+    });
 }
 
 void HotStuffBase::status_handler(MsgStatus &&msg, const Net::conn_t &conn) {
@@ -605,6 +605,21 @@ void HotStuffBase::do_status(const Status &status) {
         on_receive_status(status);
 }
 
+void HotStuffBase::block_fetched(const block_t &blk, const ReplicaID replicaId) {
+    on_fetch_blk(blk);
+    std::vector<promise_t> pms;
+    for (const auto &phash: blk->get_parent_hashes())
+        pms.push_back(async_deliver_blk(phash, get_config().get_addr(replicaId)));
+    if (blk != get_genesis())
+        pms.push_back(blk->verify(get_config(), vpool));
+    promise::all(pms).then([this, blk]() {
+        on_deliver_blk(blk);
+        HotStuffCore::do_vote(blk);
+    });
+
+
+}
+
 void HotStuffBase::encode(int k, int m, int w, DataStream &s, const uint256_t &blk_hash, bool do_echo){
 
     uint32_t size = s.size();
@@ -626,34 +641,37 @@ void HotStuffBase::encode(int k, int m, int w, DataStream &s, const uint256_t &b
         s << '0';
 
     char *block = reinterpret_cast<char *>(s.data());
-    RcObj<chunkarray_t > chunks(new chunkarray_t);
+//    RcObj<chunkarray_t> chunks(new chunkarray_t);
+//    auto size = std::make_shared<size_t>(promise_list.size());
+    auto chunks = std::make_shared<chunkarray_t>();
+    chunks->resize(k+m);
+
+    auto coding_results = std::make_shared<std::vector<bytearray_t>>();
+    coding_results->resize(m);
 
     data = (char **) malloc(sizeof(char*) * k);
-    coding = (char **) malloc(sizeof(char *) * m);
-
-    for (i = 0; i < m; i++)
-        coding[i] = (char *)malloc(sizeof(char)*blocksize);
+//    coding = (char **) malloc(sizeof(char *) * m);
+//
+//    for (i = 0; i < m; i++)
+//        coding[i] = (char *)malloc(sizeof(char)*blocksize);
 
     for (i = 0; i < k; i++) {
         data[i] = block + (i * blocksize);
         bytearray_t bt(data[i], data[i]+blocksize);
-        chunks->push_back(new Chunk(size, std::move(bt)));
+        (*chunks)[i] = new Chunk(size, std::move(bt));
     }
 
     matrix = reed_sol_vandermonde_coding_matrix(k, m, w);
 
     std::vector<promise_t> vpm;
     for (i = 0; i < m; i++){
-        vpm.push_back(vpool.verify(new EncodeTask(k, w, matrix+(i*k), k+i, data, coding, blocksize)));
+        vpm.push_back(vpool.verify(new EncodeTask(k, m, w, matrix, i, data, coding_results, blocksize)));
     }
 
-    promise::all(vpm).then([this, m, size, chunks, blk_hash, do_echo](const promise::values_t &values) {
-
+    promise::all(vpm).then([this, k, m, size, chunks, coding_results, blk_hash, do_echo](const promise::values_t &values) {
 
         for(int i=0; i<m; i++) {
-            auto v = values[i];
-//            bytearray_t bt([i], coding[i]+blocksize);
-//            chunks->push_back(new Chunk(size, std::move(values[])));
+            (*chunks)[k+i] = new Chunk(size, std::move((*coding_results)[i]));
         }
 
         on_encode_complete(blk_hash, *chunks, do_echo);
@@ -664,7 +682,7 @@ void HotStuffBase::decode(const int k, const int m, const int w, const chunkarra
     size_t size = chunks[0]->get_blk_size();
     int *matrix;
     char **data, **coding;
-    int i, blocksize, extra = 0;
+    int i, blocksize;
     int *_erasures = erasures.data();
 
     int x = (int) size / (k * sizeof(long));
