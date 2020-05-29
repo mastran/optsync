@@ -19,7 +19,6 @@
 #include <stack>
 #include <cmath>
 #include <sstream>
-#include <exception>
 
 #include "hotstuff/util.h"
 #include "hotstuff/consensus.h"
