@@ -53,58 +53,6 @@ class Chunk {
 };
 
 
-
-class EncodeTask: public VeriTask {
-    int k;
-    int m;
-    int w;
-    int *matrix;
-    int i;
-    char** data;
-    char** coding;
-    std::shared_ptr<std::vector<bytearray_t>> coding_results;
-    int blocksize;
-
-    public:
-    EncodeTask(int k, int m, int w, int *matrix, int i, char **data, std::shared_ptr<std::vector<bytearray_t>> coding_results, int blocksize):
-            k(k), m(m), w(w), matrix(matrix), i(i), data(data), coding_results(coding_results), blocksize(blocksize) {}
-    virtual ~EncodeTask() = default;
-
-    bool verify() override {
-
-    coding = (char **) malloc(sizeof(char *) * m);
-    for (int j = 0; j < m; j++)
-        coding[j] = (char *)malloc(sizeof(char)*blocksize);
-
-    jerasure_matrix_dotprod(k, w, matrix+(i*k), NULL, k+i, data, coding, blocksize);
-
-    bytearray_t bt(coding[i], coding[i]+blocksize);
-    (*coding_results)[i] = bt;
-    return true;
-    }
-};
-
-class DecodeTask: public VeriTask {
-    int k;
-    int w;
-    int *matrix;
-    int *src_ids;
-    int dest_id;
-    char** data;
-    char** coding;
-    int blocksize;
-
-public:
-    DecodeTask(int k, int w, int *matrix, int* src_ids, int dest_id, char **data, char **coding, int blocksize):
-            k(k), w(w), matrix(matrix), src_ids(src_ids), dest_id(dest_id), data(data), coding(coding), blocksize(blocksize) {}
-    virtual ~DecodeTask() = default;
-
-    bool verify() override {
-        return true;
-    }
-};
-
-
 class Erasure {
     public:
     static chunkarray_t encode(int k, int m, int w, DataStream &s){
@@ -138,7 +86,6 @@ class Erasure {
             data[i] = block+(i*blocksize);
 
         matrix = reed_sol_vandermonde_coding_matrix(k, m, w);
-
         jerasure_matrix_encode(k, m, w, matrix, data, coding, blocksize);
         chunkarray_t chunks;
 
@@ -196,8 +143,6 @@ class Erasure {
         return true;
     }
 };
-
-
 
 }
 

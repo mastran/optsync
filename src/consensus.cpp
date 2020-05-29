@@ -29,8 +29,6 @@
 #define LOG_WARN HOTSTUFF_LOG_WARN
 #define LOG_PROTO HOTSTUFF_LOG_PROTO
 
-using namespace std;
-
 namespace hotstuff {
 
 /* The core logic of HotStuff, is fairly simple :). */
@@ -58,9 +56,8 @@ void HotStuffCore::sanity_check_delivered(const block_t &blk) {
 
 block_t HotStuffCore::get_delivered_blk(const uint256_t &blk_hash) {
     block_t blk = storage->find_blk(blk_hash);
-    if (blk == nullptr || !blk->delivered) {
+    if (blk == nullptr || !blk->delivered)
         throw std::runtime_error("block not delivered");
-    }
     return std::move(blk);
 }
 
@@ -264,21 +261,7 @@ void print_bytearray2(size_t size, uint8_t *arr){
     LOG_INFO("Datastream : %s", s.c_str());
 }
 
-void HotStuffCore::on_encode_complete(const uint256_t &blk_hash, chunkarray_t &chunk_array, bool do_echo){
-    for(int i = 0; i < config.nreplicas; i++) {
-        print_bytearray(blk_hash, i, chunk_array[i]->get_data());
 
-        if (i != id) {
-            NewProposal np(id, blk_hash, chunk_array[i]);
-            do_new_proposal(i, np);
-        }else{
-            if (do_echo) {
-                Echo echo(id, blk_hash, chunk_array[i]);
-                do_broadcast_echo(echo);
-            }
-        }
-    }
-}
 
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
                             const std::vector<block_t> &parents,
@@ -323,12 +306,9 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 
     bnew->serialize(s);
 
-//    print_bytearray2(s.size(), s.data());
-
-    uint256_t blk_hash = bnew->get_hash();
-
     chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
 
+    uint256_t  blk_hash = bnew->get_hash();
     for(int i = 0; i < nreplicas; i++) {
         if (i != id) {
             NewProposal np(id, blk_hash, chunk_array[i]);
@@ -338,7 +318,6 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
             do_broadcast_echo(echo);
         }
     }
-
     _vote(bnew);
     return bnew;
 }
@@ -692,7 +671,7 @@ void HotStuffCore::prune(uint32_t staleness) {
 
 void HotStuffCore::add_replica(ReplicaID rid, const NetAddr &addr,
                                 pubkey_bt &&pub_key) {
-    config.add_replica(rid,
+    config.add_replica(rid, 
             ReplicaInfo(rid, addr, std::move(pub_key)));
     b0->voted.insert(rid);
 }
