@@ -19,6 +19,7 @@
 #include <stack>
 #include <cmath>
 #include <sstream>
+#include <exception>
 
 #include "hotstuff/util.h"
 #include "hotstuff/consensus.h"
@@ -28,6 +29,8 @@
 #define LOG_DEBUG HOTSTUFF_LOG_DEBUG
 #define LOG_WARN HOTSTUFF_LOG_WARN
 #define LOG_PROTO HOTSTUFF_LOG_PROTO
+
+using namespace std;
 
 namespace hotstuff {
 
@@ -325,9 +328,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 
     uint256_t blk_hash = bnew->get_hash();
 
-//    encode(nmajority, nfaulty, 8, s, blk_hash, true);
-
-    chunkarray_t chunk_array = Erasure::encode(3, 2, 8, s);
+    chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
 
     for(int i = 0; i < nreplicas; i++) {
         if (i != id) {
@@ -395,7 +396,7 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
     LOG_PROTO("got %s", std::string(prop).c_str());
 
     uint256_t blk_hash = prop.blk_hash;
-    this->chunks[blk_hash][id] = prop.chunk;
+    insert_chunk(blk_hash, id, prop.chunk);
 
     //broadcast its share.
     Echo echo(id, prop.blk_hash, prop.chunk);
@@ -439,7 +440,6 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         for(int i=0; i < (int) nreplicas; i++){
             if (this->chunks[blk_hash][i]){
                 arr.push_back(this->chunks[blk_hash][i]);
-//                LOG_INFO("Blk_hash :%s, Chunk num %d", get_hex10(blk_hash).c_str(), i);
             }else{
                 arr.push_back(new Chunk(echo.chunk->get_blk_size(), bytearray_t (echo.chunk->get_data().size())));
                 erasures.push_back(i);
@@ -456,22 +456,15 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
 
         block_t _blk = storage->add_blk(std::move(_block), config);
 
-//        on_deliver_blk(_blk);
         block_fetched(_blk, echo.proposer);
 
-//        _vote(_blk);
-
-        DataStream s;
-        _blk->serialize(s);
-
-        chunkarray_t chunk_array = Erasure::encode(3, 2, 8, s);
+        // Broadcast its shares to all replicas.
         for(int i = 0; i < nreplicas; i++) {
-            if (i != id) {
-                NewProposal np(id, blk_hash, chunk_array[i]);
+            if (i != id && this->chunks[blk_hash][i]) {
+                NewProposal np(id, blk_hash, this->chunks[blk_hash][i]);
                 do_new_proposal(i, np);
             }
         }
-
     }
 }
 
@@ -700,7 +693,7 @@ void HotStuffCore::prune(uint32_t staleness) {
 
 void HotStuffCore::add_replica(ReplicaID rid, const NetAddr &addr,
                                 pubkey_bt &&pub_key) {
-    config.add_replica(rid, 
+    config.add_replica(rid,
             ReplicaInfo(rid, addr, std::move(pub_key)));
     b0->voted.insert(rid);
 }
