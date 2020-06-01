@@ -366,6 +366,7 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     finished_propose[bnew] = true;
     on_receive_proposal_(prop);
     // check if the proposal extends the highest certified block
+
 //    if (opinion && !vote_disabled) _vote(bnew);
 }
 
