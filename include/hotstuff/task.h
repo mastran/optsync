@@ -17,6 +17,7 @@
 #ifndef _HOTSTUFF_WORKER_H
 #define _HOTSTUFF_WORKER_H
 
+#include <any>
 #include <thread>
 #include <unordered_map>
 #include <unistd.h>
@@ -28,9 +29,9 @@ namespace hotstuff {
 
 class VeriTask {
     friend class VeriPool;
-    bool result;
+    std::any result;
     public:
-    virtual bool verify() = 0;
+    virtual std::any verify() = 0;
     virtual ~VeriTask() = default;
 };
 

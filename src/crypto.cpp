@@ -112,8 +112,31 @@ bool QuorumCertBLS::verify(const ReplicaConfig &config){
 }
 
 promise_t QuorumCertBLS::verify(const ReplicaConfig &config, VeriPool &vpool) {
-    return promise_t([](promise_t &pm) { pm.resolve(true); });
-//    return promise_t([this, config](promise_t &pm) { return verify(config); });
+    MsgHashBLS msgHash(obj_hash);
+    std::vector<promise_t> vpm;
+
+    for (size_t i = 0; i < rids.size(); i++)
+        if (rids.get(i))
+        {
+            HOTSTUFF_LOG_DEBUG("checking cert(%d), obj_hash=%s",
+                               i, get_hex10(obj_hash).c_str());
+            vpm.push_back(vpool.verify(new QuorumVeriTask(msgHash,
+                    static_cast<const PubKeyBLS &>(config.get_pubkey(i)))));
+        }
+    if(!vpm.size()) return promise_t([](promise_t &pm) { pm.resolve(true); });
+
+    return promise::all(vpm).then([this](const promise::values_t &values) {
+        element_t t1, t2;
+        auto ctx = BLSContext::getInstance();
+        element_init_GT(t1, ctx->getPairing());
+        element_init_GT(t2, ctx->getPairing());
+        element_pairing(t1, sigs, ctx->getGenerator());
+
+        for (const auto &v: values)
+            element_mul(t2, t2, *(element_t *)promise::any_cast<GT>(v).t);
+
+        return (bool) element_cmp(t1, t2);
+    });
 }
 
 }

@@ -341,7 +341,7 @@ class Secp256k1VeriTask: public VeriTask {
         msg(msg), pubkey(pubkey), sig(sig) {}
     virtual ~Secp256k1VeriTask() = default;
 
-    bool verify() override {
+    std::any verify() override {
         return sig.verify(msg, pubkey, secp256k1_default_verify_ctx);
     }
 };
@@ -505,6 +505,7 @@ public:
 class PubKeyBLS: public PubKey {
     friend class BLSSig;
     friend class QuorumCertBLS;
+    friend class QuorumVeriTask;
     element_t pubkey;
 
 public:
@@ -616,6 +617,21 @@ public:
 };
 
 
+class BLSVeriTask: public VeriTask {
+    uint256_t msg;
+    PubKeyBLS pubkey;
+    BLSSig sig;
+public:
+    BLSVeriTask(const uint256_t &msg, const PubKeyBLS &pubkey, const BLSSig &sig):
+                msg(msg), pubkey(pubkey), sig(sig) {}
+    virtual ~BLSVeriTask() = default;
+
+    std::any verify() override {
+        return sig.verify(msg, pubkey);
+    }
+};
+
+
 class PartCertBLS: public BLSSig, public PartCert {
     friend class QuorumCertBLS;
     uint256_t obj_hash;
@@ -632,8 +648,9 @@ public:
     }
 
     promise_t verify(const PubKey &pub_key, VeriPool &vpool) override {
-        // Todo: Modify this function to do real verification.
-        return promise_t([](promise_t &pm) { pm.resolve(true); });
+        return vpool.verify(new BLSVeriTask(obj_hash,
+                                           static_cast<const PubKeyBLS &>(pub_key),
+                                           static_cast<const BLSSig &>(*this)));
     }
 
     const uint256_t &get_obj_hash() const override { return obj_hash; }
@@ -652,7 +669,6 @@ public:
         this->BLSSig::unserialize(s);
     }
 };
-
 
 class QuorumCertBLS: public QuorumCert {
     uint256_t obj_hash;
@@ -700,6 +716,45 @@ public:
         bytearray_t data = bytearray_t(base, base + n);
         element_from_bytes_compressed(sigs, data.data());
     }
+};
+
+class MsgHashBLS {
+    friend class QuorumCertBLS;
+    friend class QuorumVeriTask;
+    element_t h;
+
+    MsgHashBLS(const bytearray_t &arr){
+        auto ctx = BLSContext::getInstance();
+        element_init_G1(h, ctx->getPairing());
+        element_from_hash(h, (char *)arr.data(), arr.size());
+    }
+};
+
+class GT{
+    friend class QuorumCertBLS;
+    friend class QuorumVeriTask;
+    element_t t;
+
+    GT() = default;
+};
+
+class QuorumVeriTask: public VeriTask {
+    PubKeyBLS pubkey;
+    MsgHashBLS msgHash;
+//    element_t t1;
+    GT t1;
+public:
+    QuorumVeriTask(MsgHashBLS &msgHash, const PubKeyBLS &pubkey):
+            msgHash(msgHash), pubkey(pubkey) {
+        auto ctx = BLSContext::getInstance();
+        element_init_GT(t1.t, ctx->getPairing());
+    }
+    virtual ~QuorumVeriTask() = default;
+
+    std::any verify() override {
+        element_pairing(t1.t, msgHash.h, *(element_t *)pubkey.pubkey);
+        return t1;
+    };
 };
 
 }
