@@ -42,10 +42,28 @@ set_target_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/secp256k1/.libs/libsecp256k1.a)
 add_dependencies(secp256k1 libsecp256k1)
 
+
+include(ExternalProject)
+include_directories(pbcwrapper)
+ExternalProject_Add(libPBC
+        SOURCE_DIR pbcwrapper
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND make
+        INSTALL_COMMAND ""
+        BUILD_IN_SOURCE 1)
+
+add_library(pbcwrapper STATIC IMPORTED)
+set_target_properties(
+        pbcwrapper
+        PROPERTIES IMPORTED_LOCATION
+        ${CMAKE_CURRENT_SOURCE_DIR}/pbcwrapper/libPBC.a)
+add_dependencies(pbcwrapper libPBC)
+
 # add libraries
 
 include_directories(./)
 include_directories(include)
+include_directories(/usr/local/include/pbc)
 add_library(hotstuff
     OBJECT
     src/util.cpp
@@ -61,11 +79,11 @@ if(BUILD_SHARED)
     set_property(TARGET hotstuff PROPERTY POSITION_INDEPENDENT_CODE 1)
     add_library(hotstuff_shared SHARED $<TARGET_OBJECTS:hotstuff>)
     set_target_properties(hotstuff_shared PROPERTIES OUTPUT_NAME "hotstuff")
-    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto pbc gmp pbcwrapper ${CMAKE_THREAD_LIBS_INIT})
 endif()
 add_library(hotstuff_static STATIC $<TARGET_OBJECTS:hotstuff>)
 set_target_properties(hotstuff_static PROPERTIES OUTPUT_NAME "hotstuff")
-target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto pbc gmp pbcwrapper ${CMAKE_THREAD_LIBS_INIT})
 
 add_subdirectory(test)
 
@@ -95,6 +113,10 @@ target_link_libraries(hotstuff-client hotstuff_static)
 add_executable(hotstuff-keygen
     src/hotstuff_keygen.cpp)
 target_link_libraries(hotstuff-keygen hotstuff_static)
+
+add_executable(bls-keygen
+        src/bls_keygen.cpp)
+target_link_libraries(bls-keygen  pbc gmp pbcwrapper hotstuff_static)
 
 find_package(Doxygen)
 if (DOXYGEN_FOUND)
