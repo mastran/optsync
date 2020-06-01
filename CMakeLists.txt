@@ -47,6 +47,7 @@ add_dependencies(secp256k1 libsecp256k1)
 
 include_directories(./)
 include_directories(include)
+include_directories(/usr/local/include)
 include_directories(/usr/local/include/pbc)
 add_library(hotstuff
     OBJECT
