@@ -5,8 +5,9 @@ import argparse
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate configuration file for a batch of replicas')
-    parser.add_argument('--prefix', type=str, default='hotstuff')
+    parser.add_argument('--prefix', type=str, default='hotstuff.gen')
     parser.add_argument('--ips', type=str, default=None)
+    parser.add_argument('--pub-ips', type=str, default=None)
     parser.add_argument('--iter', type=int, default=10)
     parser.add_argument('--pport', type=int, default=10000)
     parser.add_argument('--cport', type=int, default=20000)
@@ -14,20 +15,31 @@ if __name__ == "__main__":
     parser.add_argument('--nodes', type=str, default='nodes.txt')
     parser.add_argument('--block-size', type=int, default=1)
     parser.add_argument('--pace-maker', type=str, default='dummy')
+    parser.add_argument('--output', type=str, default='')
+
     args = parser.parse_args()
 
     if args.ips is None:
         ips = ['127.0.0.1']
     else:
         ips = [l.strip() for l in open(args.ips, 'r').readlines()]
+
+    if args.pub_ips is None:
+        pub_ips = ips
+    else:
+        pub_ips = [l.strip() for l in open(args.pub_ips, 'r').readlines()]
+
     prefix = args.prefix
     iter = args.iter
     base_pport = args.pport
     base_cport = args.cport
     keygen_bin = args.keygen
 
-    main_conf = open("{}.conf".format(prefix), 'w')
-    nodes = open(args.nodes, 'w')
+    base_path = args.output
+    base_path += '/' if base_path and base_path[-1] != '/' else ''
+
+    main_conf = open(base_path + "{}.conf".format(prefix), 'w')
+    nodes = open(base_path + args.nodes, 'w')
     replicas = ["{}:{};{}".format(ip, base_pport + i, base_cport + i)
                 for ip in ips
                 for i in range(iter)]
@@ -45,6 +57,6 @@ if __name__ == "__main__":
         main_conf.write("replica = {}- {}\n".format(r[0], r[1][0]))
         r_conf_name = "{}-sec{}.conf".format(prefix, r[2])
         nodes.write("{}:{}\t{}\n".format(r[2], r[0], r_conf_name))
-        r_conf = open(r_conf_name, 'w')
+        r_conf = open(base_path + r_conf_name, 'w')
         r_conf.write("privkey = {}\n".format(r[1][1]))
         r_conf.write("idx = {}\n".format(r[2]))
