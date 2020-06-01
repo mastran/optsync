@@ -64,8 +64,27 @@ void Block::unserialize(DataStream &s, HotStuffCore *hsc) {
         auto base = s.get_data_inplace(n);
         extra = bytearray_t(base, base + n);
     }
-    this->hash = salticidae::get_hash(*this);
+    this->hash = _get_hash();
 }
 
+/** The following function removes qc from block hash.
+ * qc could either be synchronous or responsive. So, the hash would change
+ * if qc changes from synchronou to responsive.
+ * **/
+uint256_t Block::_get_hash() {
+    DataStream s;
+    s << htole((uint32_t)parent_hashes.size());
+    for (const auto &hash: parent_hashes)
+        s << hash;
+    s << htole((uint32_t)cmds.size());
+    for (auto cmd: cmds)
+        s << cmd;
+    if (qc)
+        s << (uint8_t)1 << qc_ref_hash;
+    else
+        s << (uint8_t)0;
+    s << htole((uint32_t)extra.size()) << extra;
+    return s.get_hash();
+}
 
 }

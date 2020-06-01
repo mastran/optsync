@@ -35,6 +35,7 @@
 #include "hotstuff/util.h"
 #include "hotstuff/client.h"
 #include "hotstuff/hotstuff.h"
+#include "hotstuff/crypto.h"
 
 using salticidae::MsgNetwork;
 using salticidae::ClientNetwork;
@@ -63,7 +64,8 @@ using hotstuff::MsgRespCmd;
 using hotstuff::get_hash;
 using hotstuff::promise_t;
 
-using HotStuff = hotstuff::HotStuffSecp256k1;
+//using HotStuff = hotstuff::HotStuffSecp256k1;
+using HotStuff = hotstuff::HotStuffBLS;
 
 class HotStuffApp: public HotStuff {
     double stat_period;
@@ -180,6 +182,7 @@ int main(int argc, char **argv) {
     auto opt_clinworker = Config::OptValInt::create(8);
     auto opt_cliburst = Config::OptValInt::create(1000);
     auto opt_delta = Config::OptValDouble::create(1);
+    auto opt_generator = Config::OptValStr::create();
 
     config.add_opt("block-size", opt_blk_size, Config::SET_VAL);
     config.add_opt("parent-limit", opt_parent_limit, Config::SET_VAL);
@@ -199,6 +202,7 @@ int main(int argc, char **argv) {
     config.add_opt("clinworker", opt_clinworker, Config::SET_VAL, 'M', "the number of threads for client network");
     config.add_opt("cliburst", opt_cliburst, Config::SET_VAL, 'B', "");
     config.add_opt("delta", opt_delta, Config::SET_VAL, 'd', "maximum network delay");
+    config.add_opt("generator", opt_generator, Config::SET_VAL, 'g', "group generator");
     config.add_opt("help", opt_help, Config::SWITCH_ON, 'h', "show this help info");
 
     EventContext ec;
@@ -208,12 +212,18 @@ int main(int argc, char **argv) {
         config.print_help();
         exit(0);
     }
+
+    auto bls_ctx = hotstuff::BLSContext::getInstance();
+    FILE *sysParamFile = fopen("pairing.param", "r");
+    bls_ctx->initParams(sysParamFile, opt_generator->get().c_str());
+    fclose(sysParamFile);
+
     auto idx = opt_idx->get();
     auto client_port = opt_client_port->get();
     std::vector<std::pair<std::string, std::string>> replicas;
     for (const auto &s: opt_replicas->get())
     {
-        auto res = trim_all(split(s, ","));
+        auto res = trim_all(split(s, "-"));
         if (res.size() != 2)
             throw HotStuffError("invalid replica info");
         replicas.push_back(std::make_pair(res[0], res[1]));
@@ -250,11 +260,13 @@ int main(int argc, char **argv) {
     clinet_config
         .burst_size(opt_cliburst->get())
         .nworker(opt_clinworker->get());
+
+    bytearray_t privKey(opt_privkey->get().begin(), opt_privkey->get().end());
     papp = new HotStuffApp(opt_blk_size->get(),
                         opt_stat_period->get(),
                         opt_imp_timeout->get(),
                         idx,
-                        hotstuff::from_hex(opt_privkey->get()),
+                        privKey,
                         plisten_addr,
                         NetAddr("0.0.0.0", client_port),
                         std::move(pmaker),
@@ -266,8 +278,8 @@ int main(int argc, char **argv) {
     for (auto &r: replicas)
     {
         auto p = split_ip_port_cport(r.first);
-        reps.push_back(std::make_pair(
-            NetAddr(p.first), hotstuff::from_hex(r.second)));
+        bytearray_t bt(r.second.begin(), r.second.end());
+        reps.push_back(std::make_pair(NetAddr(p.first), bt));
     }
     auto shutdown = [&](int) { papp->stop(); };
     salticidae::SigEvent ev_sigint(ec, shutdown);

@@ -63,4 +63,57 @@ promise_t QuorumCertSecp256k1::verify(const ReplicaConfig &config, VeriPool &vpo
     });
 }
 
+
+BLSContext *BLSContext::instance = 0;
+
+
+pubkey_bt PrivKeyBLS::get_pubkey() const {
+    return new PubKeyBLS(*this);
+}
+
+QuorumCertBLS::QuorumCertBLS(){
+    auto ctx = BLSContext::getInstance();
+    element_init_G1(sigs, ctx->getPairing());
+}
+
+QuorumCertBLS::QuorumCertBLS(const ReplicaConfig &config, const uint256_t &obj_hash):
+    QuorumCert(), obj_hash(obj_hash), rids(config.nreplicas) {
+    rids.clear();
+    auto ctx = BLSContext::getInstance();
+    element_init_G1(sigs, ctx->getPairing());
+}
+
+bool QuorumCertBLS::verify(const ReplicaConfig &config){
+    //Todo: maintain a variable to store the number of sigs
+    HOTSTUFF_LOG_DEBUG("checking quorum cert, obj_hash=%s", get_hex10(obj_hash).c_str());
+    auto ctx = BLSContext::getInstance();
+    element_t t1, t2, t3, h;
+    auto e = ctx->getPairing();
+    auto g = ctx->getGenerator();
+    element_init_G1(h, e);
+
+    bytearray_t bt = obj_hash;
+    element_from_hash(h, (char *)bt.data(), bt.size());
+    element_init_GT(t1, e);
+    element_init_GT(t2, e);
+    element_init_GT(t3, e);
+
+    element_pairing(t3, sigs, g);
+
+    for (size_t i = 0; i < rids.size(); i++){
+        if (rids.get(i))
+        {
+            element_pairing(t1, h, *(element_t *) static_cast<const PubKeyBLS &>(config.get_pubkey(i)).pubkey);
+            element_mul(t2, t2, t1);
+        }
+    }
+
+    return element_cmp(t2, t3);
+}
+
+promise_t QuorumCertBLS::verify(const ReplicaConfig &config, VeriPool &vpool) {
+    return promise_t([](promise_t &pm) { pm.resolve(true); });
+//    return promise_t([this, config](promise_t &pm) { return verify(config); });
+}
+
 }

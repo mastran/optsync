@@ -23,6 +23,7 @@
 #include "salticidae/crypto.h"
 #include "hotstuff/type.h"
 #include "hotstuff/task.h"
+#include "pbc/pbc.h"
 
 namespace hotstuff {
 
@@ -422,6 +423,282 @@ class QuorumCertSecp256k1: public QuorumCert {
         s >> obj_hash >> rids;
         for (size_t i = 0; i < rids.size(); i++)
             if (rids.get(i)) s >> sigs[i];
+    }
+};
+
+class BLSContext {
+    static BLSContext *instance;
+    pairing_t e;
+    element_t g;
+
+    BLSContext() {}
+
+public:
+    static BLSContext *getInstance(){
+        if(!instance)
+            instance = new BLSContext();
+        return instance;
+    }
+
+    void initParams(const FILE * buf, const char* gen, unsigned short base=10) {
+        char s[8192];
+        size_t count = fread(s, 1, 8192, *(FILE **) &buf);
+
+        if (count)
+            if (pairing_init_set_buf(e, s, count)) {
+                throw std::invalid_argument("invalid pairing file");
+            }
+        element_init_G2(g, e);
+        element_set_str(g, gen, base);
+    }
+
+    pairing_t& getPairing(){
+        return e;
+    }
+
+    element_t& getGenerator(){
+        return g;
+    }
+};
+
+class PubKeyBLS;
+
+class PrivKeyBLS: public PrivKey {
+    friend class PubKeyBLS;
+    friend class BLSSig;
+    element_t privKey;
+
+public:
+    PrivKeyBLS(): PrivKey() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_Zr(privKey, ctx->getPairing());
+    }
+
+    PrivKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PrivKeyBLS() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_Zr(privKey, ctx->getPairing());
+        element_set_str(privKey, (const char *)raw_bytes.data(), base);
+    }
+
+    void serialize(DataStream &s) const override {
+        int n = element_length_in_bytes_compressed(*(element_t *)privKey);
+        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
+        element_to_bytes_compressed(data, *(element_t *)privKey);
+        s << n;
+        s.put_data(data, data+n);
+    }
+
+    void unserialize(DataStream &s) override {
+        int n;
+        s >> n;
+        auto base = s.get_data_inplace(n);
+        bytearray_t  data = bytearray_t(base, base + n);
+        element_from_bytes_compressed(privKey, data.data());
+    }
+
+    pubkey_bt get_pubkey() const override;
+
+    void from_rand() override {}
+};
+
+
+class PubKeyBLS: public PubKey {
+    friend class BLSSig;
+    friend class QuorumCertBLS;
+    element_t pubkey;
+
+public:
+    PubKeyBLS(): PubKey() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_G2(pubkey, ctx->getPairing());
+    }
+
+    PubKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PubKey() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_G2(pubkey, ctx->getPairing());
+        element_set_str(pubkey, (const char *)raw_bytes.data(), base);
+    }
+
+    PubKeyBLS(const PrivKeyBLS &priv_key): PubKey() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_G2(pubkey, ctx->getPairing());
+        element_pow_zn(pubkey, ctx->getGenerator(), *(element_t *)priv_key.privKey);
+    }
+
+    void serialize(DataStream &s) const override {
+        uint8_t n = element_length_in_bytes_compressed(*(element_t *)pubkey);
+        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
+        element_to_bytes_compressed(data, *(element_t *)pubkey);
+        s << n;
+        s.put_data(data, data+n);
+    }
+
+    void unserialize(DataStream &s) override {
+        uint8_t n;
+        s >> n;
+        auto base = s.get_data_inplace(n);
+        bytearray_t  data = bytearray_t(base, base + n);
+        element_from_bytes_compressed(pubkey, data.data());
+    }
+
+    PubKeyBLS *clone() override {
+        return new PubKeyBLS(*this);
+    }
+};
+
+
+class BLSSig: public Serializable {
+    friend class QuorumCertBLS;
+    element_t sig;
+
+    static void check_msg_length(const bytearray_t &msg) {
+        if (msg.size() != 32)
+            throw std::invalid_argument("the message should be 32-bytes");
+    }
+
+public:
+    BLSSig(): Serializable()  {
+        const auto ctx = BLSContext::getInstance();
+        element_init_G1(sig, ctx->getPairing());
+    }
+
+    BLSSig(const uint256_t &digest, const PrivKeyBLS &priv_key):  Serializable() {
+        const auto ctx = BLSContext::getInstance();
+        element_init_G1(sig, ctx->getPairing());
+        sign(digest, priv_key);
+    }
+
+    void serialize(DataStream &s) const override {
+        uint8_t n = element_length_in_bytes_compressed(*(element_t *)sig);
+        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
+        element_to_bytes_compressed(data, *(element_t *)sig);
+        s << n;
+        s.put_data(data, data+n);
+    }
+
+    void unserialize(DataStream &s) override {
+        uint8_t n;
+        s >> n;
+        auto base = s.get_data_inplace(n);
+        bytearray_t  data = bytearray_t(base, base + n);
+        element_from_bytes_compressed(sig, data.data());
+    }
+
+    void sign(const bytearray_t &msg, const PrivKeyBLS &priv_key) {
+        check_msg_length(msg);
+        auto ctx = BLSContext::getInstance();
+        element_t h;
+        element_init_G1(h, ctx->getPairing());
+        element_from_hash(h, (char *)msg.data(), msg.size());
+        //h^secret_key is the signature
+        element_pow_zn(sig, h, *(element_t *)priv_key.privKey);
+    }
+
+    bool verify(const bytearray_t &msg, const PubKeyBLS &pub_key) {
+        auto ctx = BLSContext::getInstance();
+        element_t t1, t2, h;
+        auto e = ctx->getPairing();
+        auto g = ctx->getGenerator();
+        element_init_GT(t1, e);
+        element_init_GT(t2, e);
+        element_init_G1(h, e);
+
+        //verification part 1
+        element_pairing(t1, sig, g);
+
+        //verification part 2
+        //should match above
+        element_from_hash(h, (char *)msg.data(), msg.size());
+        element_pairing(t2, h, *(element_t *)pub_key.pubkey);
+
+        return (bool) element_cmp(t1, t2);
+    }
+};
+
+
+class PartCertBLS: public BLSSig, public PartCert {
+    friend class QuorumCertBLS;
+    uint256_t obj_hash;
+
+public:
+    PartCertBLS() = default;
+    PartCertBLS(const PrivKeyBLS &priv_key, const uint256_t &obj_hash):
+            BLSSig(obj_hash, priv_key),
+            PartCert(),
+            obj_hash(obj_hash) {}
+
+    bool verify(const PubKey &pub_key) override {
+        return BLSSig::verify(obj_hash, static_cast<const PubKeyBLS &>(pub_key));
+    }
+
+    promise_t verify(const PubKey &pub_key, VeriPool &vpool) override {
+        // Todo: Modify this function to do real verification.
+        return promise_t([](promise_t &pm) { pm.resolve(true); });
+    }
+
+    const uint256_t &get_obj_hash() const override { return obj_hash; }
+
+    PartCertBLS *clone() override {
+        return new PartCertBLS(*this);
+    }
+
+    void serialize(DataStream &s) const override {
+        s << obj_hash;
+        this->BLSSig::serialize(s);
+    }
+
+    void unserialize(DataStream &s) override {
+        s >> obj_hash;
+        this->BLSSig::unserialize(s);
+    }
+};
+
+
+class QuorumCertBLS: public QuorumCert {
+    uint256_t obj_hash;
+    salticidae::Bits rids;
+    element_t sigs;
+
+public:
+    QuorumCertBLS();
+    QuorumCertBLS(const ReplicaConfig &config, const uint256_t &obj_hash);
+
+    void add_part(ReplicaID rid, const PartCert &pc) override {
+        if (pc.get_obj_hash() != obj_hash)
+            throw std::invalid_argument("PartCert does match the block hash");
+        auto _pc = static_cast<const PartCertBLS &>(pc);
+
+        element_mul(sigs, sigs, *(element_t *)_pc.sig);
+        rids.set(rid);
+    }
+
+    void compute() override {}
+
+    bool verify(const ReplicaConfig &config) override;
+    promise_t verify(const ReplicaConfig &config, VeriPool &vpool) override;
+
+    const uint256_t &get_obj_hash() const override { return obj_hash; }
+
+    QuorumCertBLS *clone() override {
+        return new QuorumCertBLS(*this);
+    }
+
+    void serialize(DataStream &s) const override {
+        s << obj_hash << rids;
+        uint8_t n = element_length_in_bytes_compressed(*(element_t *)sigs);
+        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
+        element_to_bytes_compressed(data, *(element_t *)sigs);
+        s << n;
+        s.put_data(data, data+n);
+    }
+
+    void unserialize(DataStream &s) override {
+        s >> obj_hash >> rids;
+        uint8_t n;
+        s >> n;
+        auto base = s.get_data_inplace(n);
+        bytearray_t data = bytearray_t(base, base + n);
+        element_from_bytes_compressed(sigs, data.data());
     }
 };
 
