@@ -257,7 +257,7 @@ void HotStuffBase::vote_handler(MsgVote &&msg, const Net::conn_t &conn) {
 
 promise_t HotStuffBase::verify_notify(Notify &notify){
     block_t blk = storage->find_blk(notify.blk_hash);
-    if(blk->get_decision() == 1){
+    if(blk!= nullptr && blk->get_decision() == 1){
         promise_t pm;
         return pm.then([]{ return true;});
     }

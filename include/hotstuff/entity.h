@@ -148,6 +148,8 @@ class Block {
 
     std::unordered_set<ReplicaID> voted;
 
+    uint256_t _get_hash();
+
     public:
     Block():
         qc(nullptr),
@@ -157,7 +159,7 @@ class Block {
 
     Block(bool delivered, int8_t decision):
         qc(nullptr),
-        hash(salticidae::get_hash(*this)),
+        hash(_get_hash()),
         qc_ref(nullptr), view(0),
         self_qc(nullptr), height(0),
         delivered(delivered), decision(decision) {}
@@ -176,7 +178,7 @@ class Block {
             qc(std::move(qc)),
             qc_ref_hash(qc_ref ? qc_ref->get_hash() : uint256_t()),
             extra(std::move(extra)),
-            hash(salticidae::get_hash(*this)),
+            hash(_get_hash()),
             parents(parents),
             qc_ref(qc_ref),
             self_qc(std::move(self_qc)),
