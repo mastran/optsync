@@ -5,7 +5,7 @@ import argparse
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate configuration file for a batch of replicas')
-    parser.add_argument('--prefix', type=str, default='hotstuff.gen')
+    parser.add_argument('--prefix', type=str, default='hotstuff')
     parser.add_argument('--ips', type=str, default=None)
     parser.add_argument('--pub-ips', type=str, default=None)
     parser.add_argument('--iter', type=int, default=10)
@@ -43,6 +43,9 @@ if __name__ == "__main__":
     replicas = ["{}:{};{}".format(ip, base_pport + i, base_cport + i)
                 for ip in ips
                 for i in range(iter)]
+    rep_pub = ["{}:{};{}".format(ip, base_pport + i, base_cport + i)
+               for ip in pub_ips
+               for i in range(iter)]
     p = subprocess.Popen([keygen_bin, '--num', str(len(replicas))],
                         stdout=subprocess.PIPE, stderr=open(os.devnull, 'w'))
 
@@ -56,7 +59,7 @@ if __name__ == "__main__":
     for r in zip(replicas, keys, itertools.count(0)):
         main_conf.write("replica = {}- {}\n".format(r[0], r[1][0]))
         r_conf_name = "{}-sec{}.conf".format(prefix, r[2])
-        nodes.write("{}:{}\t{}\n".format(r[2], r[0], r_conf_name))
+        nodes.write("{}:{}\t{}\n".format(r[2], rep_pub[r[2]], r_conf_name))
         r_conf = open(base_path + r_conf_name, 'w')
         r_conf.write("privkey = {}\n".format(r[1][1]))
         r_conf.write("idx = {}\n".format(r[2]))

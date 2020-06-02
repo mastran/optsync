@@ -434,7 +434,7 @@ class BLSContext {
     BLSContext() {}
 
 public:
-    static BLSContext *getInstance(){
+    inline static BLSContext *getInstance(){
         if(!instance)
             instance = new BLSContext();
         return instance;
@@ -452,11 +452,11 @@ public:
         element_set_str(g, gen, base);
     }
 
-    pairing_t& getPairing(){
+    inline pairing_t& getPairing(){
         return e;
     }
 
-    element_t& getGenerator(){
+    inline element_t& getGenerator(){
         return g;
     }
 };
@@ -474,7 +474,7 @@ public:
         element_init_Zr(privKey, ctx->getPairing());
     }
 
-    PrivKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PrivKeyBLS() {
+    PrivKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PrivKey() {
         const auto ctx = BLSContext::getInstance();
         element_init_Zr(privKey, ctx->getPairing());
         element_set_str(privKey, (const char *)raw_bytes.data(), base);
@@ -741,7 +741,6 @@ class GT{
 class QuorumVeriTask: public VeriTask {
     PubKeyBLS pubkey;
     MsgHashBLS msgHash;
-//    element_t t1;
     GT t1;
 public:
     QuorumVeriTask(MsgHashBLS &msgHash, const PubKeyBLS &pubkey):
