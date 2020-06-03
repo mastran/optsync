@@ -227,8 +227,8 @@ promise_t HotStuffBase::async_deliver_blk(const uint256_t &blk_hash,
         if (qc)
             pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
         /* the parents should be delivered */
-        for (const auto &phash: blk->get_parent_hashes())
-            pms.push_back(async_deliver_blk(phash, replica_id));
+//        for (const auto &phash: blk->get_parent_hashes())
+//            pms.push_back(async_deliver_blk(phash, replica_id));
         if (blk != get_genesis())
             pms.push_back(blk->verify(get_config(), vpool));
         promise::all(pms).then([this, blk]() {

@@ -114,31 +114,31 @@ bool HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, con
 }
 
 void HotStuffCore::check_commit(const block_t &blk) {
-    std::vector<block_t> commit_queue;
-    block_t b;
-    for (b = blk; b->height > b_exec->height; b = b->parents[0])
-    { /* TODO: also commit the uncles/aunts */
-        commit_queue.push_back(b);
-    }
+//    std::vector<block_t> commit_queue;
+//    block_t b;
+//    for (b = blk; b->height > b_exec->height; b = b->parents[0])
+//    { /* TODO: also commit the uncles/aunts */
+//        commit_queue.push_back(b);
+//    }
 
     // In responsive commit, a block could receive >3n/4 votes before its parent.
     // Hence, we need to change the logic as follows:
-    if (b != b_exec && b->decision != 1)
-        throw std::runtime_error("safety breached :( " +
-                                std::string(*blk) + " " +
-                                std::string(*b_exec));
-    for (auto it = commit_queue.rbegin(); it != commit_queue.rend(); it++)
-    {
-        const block_t &blk = *it;
-        if(blk->decision == 1)
-            continue;
+//    if (b != b_exec && b->decision != 1)
+//        throw std::runtime_error("safety breached :( " +
+//                                std::string(*blk) + " " +
+//                                std::string(*b_exec));
+//    for (auto it = commit_queue.rbegin(); it != commit_queue.rend(); it++)
+//    {
+//        const block_t &blk = *it;
+//        if(blk->decision == 1)
+//            continue;
         blk->decision = 1;
 //        do_consensus(blk);
         LOG_PROTO("commit %s", std::string(*blk).c_str());
         for (size_t i = 0; i < blk->cmds.size(); i++)
             do_decide(Finality(id, 1, i, blk->height,
                                 blk->cmds[i], blk->get_hash()));
-    }
+//    }
     b_exec = blk;
 }
 
@@ -277,7 +277,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     /* create the new block */
     block_t bnew = storage->add_blk(
         new Block(parents, cmds,
-            hqc.second->clone(), std::move(extra),
+                  nullptr, std::move(extra),
             view, // current view number
             parents[0]->height + 1,
             hqc.first,
@@ -319,6 +319,9 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
         }
     }
     _vote(bnew);
+
+    on_qc_finish(bnew);
+
     return bnew;
 }
 
@@ -483,7 +486,7 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         qc->compute();
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
 //         Start proposing new blocks
-        on_qc_finish(blk);
+//        on_qc_finish(blk);
 
     } else
         if(qsize == config.nresponsive){
@@ -678,7 +681,7 @@ void HotStuffCore::add_replica(ReplicaID rid, const NetAddr &addr,
 }
 
 promise_t HotStuffCore::async_qc_finish(const block_t &blk) {
-    if (blk->voted.size() >= config.nmajority)
+//    if (blk->voted.size() >= config.nmajority)
         return promise_t([](promise_t &pm) {
             pm.resolve();
         });
