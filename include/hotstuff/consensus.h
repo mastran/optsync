@@ -78,6 +78,7 @@ class HotStuffCore {
     /* == feature switches == */
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
+    salticidae::ElapsedTime et;
 
     /*Erasure Coded Chunks by height*/
     std::unordered_map<const uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;

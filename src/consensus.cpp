@@ -319,8 +319,10 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
         }
     }
     _vote(bnew);
-
     on_qc_finish(bnew);
+
+    et.stop(true);
+    et.start();
 
     return bnew;
 }
@@ -648,6 +650,8 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     b0->qc_ref = b0;
     hqc = std::make_pair(b0, b0->qc->clone());
     hqc_ancestor = std::make_pair(nullptr, nullptr);
+
+    et.start();
 }
 
 void HotStuffCore::prune(uint32_t staleness) {
