@@ -348,16 +348,14 @@ void HotStuffApp::client_request_cmd_handler(MsgReqCmd &&msg, const conn_t &conn
 
 void HotStuffApp::register_client_response_handler(const uint32_t cid, const uint256_t &cmd_hash){
     const NetAddr addr = this->client_addr_map[cid];
-    resp_tcall->async_call([this, cmd_hash, addr](salticidae::ThreadCall::Handle &) {
-        auto it = unconfirmed.find(cmd_hash);
-        if (it == unconfirmed.end()) {
-            it = unconfirmed.insert(
-                    std::make_pair(cmd_hash, promise_t([](promise_t &) {}))).first;
-            it->second.then([this, addr](const Finality &fin) {
-                cn.send_msg(MsgRespCmd(std::move(fin)), addr);
-            });
-        }
-    });
+    auto it = unconfirmed.find(cmd_hash);
+    if (it == unconfirmed.end()) {
+        it = unconfirmed.insert(
+                std::make_pair(cmd_hash, promise_t([](promise_t &) {}))).first;
+        it->second.then([this, addr](const Finality &fin) {
+            cn.send_msg(MsgRespCmd(std::move(fin)), addr);
+        });
+    }
 }
 
 void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta) {
