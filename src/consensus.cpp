@@ -654,6 +654,8 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     b0->qc_ref = b0;
     hqc = std::make_pair(b0, b0->qc->clone());
     hqc_ancestor = std::make_pair(nullptr, nullptr);
+
+    et.start();
 }
 
 void HotStuffCore::prune(uint32_t staleness) {
