@@ -49,6 +49,7 @@ size_t max_async_num;
 int max_iter_num;
 uint32_t cid;
 uint32_t cnt = 0;
+uint8_t mult = 100;
 uint32_t nfaulty;
 
 struct Request {
@@ -69,6 +70,10 @@ Net mn(ec, Net::Config());
 void connect_all() {
     for (size_t i = 0; i < replicas.size(); i++)
         conns.insert(std::make_pair(i, mn.connect(replicas[i])));
+
+    auto cmd = new CommandDummy(cid, cnt++);
+    MsgReqCmd msg(*cmd);
+    for (auto &p: conns) mn.send_msg(msg, p.second);
 }
 
 bool try_send(bool check = true) {
@@ -76,7 +81,11 @@ bool try_send(bool check = true) {
     {
         auto cmd = new CommandDummy(cid, cnt++);
         MsgReqCmd msg(*cmd);
-        for (auto &p: conns) mn.send_msg(msg, p.second);
+
+        // Replica 0 is the leader.
+        auto p = conns[0];
+        mn.send_msg(msg, p);
+//        for (auto &p: conns) mn.send_msg(msg, p.second);
 #ifndef HOTSTUFF_ENABLE_BENCHMARK
         HOTSTUFF_LOG_INFO("send new cmd %.10s",
                             get_hex(cmd->get_hash()).c_str());
@@ -106,7 +115,8 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
 #else
     struct timeval tv;
     gettimeofday(&tv, nullptr);
-    elapsed.push_back(std::make_pair(tv, et.elapsed_sec));
+    for(uint8_t i = 0; i < mult; i++)
+        elapsed.push_back(std::make_pair(tv, et.elapsed_sec));
 #endif
     waiting.erase(it);
 

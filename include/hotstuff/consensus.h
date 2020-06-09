@@ -78,6 +78,7 @@ class HotStuffCore {
     /* == feature switches == */
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
+    salticidae::ElapsedTime et;
 
     /*Erasure Coded Chunks by height*/
     std::unordered_map<const uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;
@@ -158,6 +159,7 @@ class HotStuffCore {
      * while the others are uncles/aunts */
     block_t on_propose(const std::vector<uint256_t> &cmds,
                     const std::vector<block_t> &parents,
+                    const std::vector<uint32_t> &cids,
                     bytearray_t &&extra = bytearray_t());
 
     /* Functions required to construct concrete instances for abstract classes.
@@ -193,6 +195,8 @@ class HotStuffCore {
     virtual void stop_viewtrans_timer() = 0;
 
     virtual void stop_status_timer() = 0;
+
+    virtual void register_command_handler(const uint32_t cid, const uint256_t cmd) = 0;
 
     /* The user plugs in the detailed instances for those
      * polymorphic data types. */

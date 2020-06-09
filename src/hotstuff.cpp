@@ -122,8 +122,8 @@ void MsgEcho::postponed_parse(HotStuffCore *hsc) {
 }
 
 // TODO: improve this function
-void HotStuffBase::exec_command(uint256_t cmd_hash, commit_cb_t callback) {
-    cmd_pending.enqueue(std::make_pair(cmd_hash, callback));
+void HotStuffBase::exec_command(uint256_t cmd_hash, uint32_t cid, commit_cb_t callback) {
+    cmd_pending.enqueue(std::make_pair(std::make_pair(cmd_hash, cid), callback));
 }
 
 void HotStuffBase::on_fetch_blk(const block_t &blk) {
@@ -227,8 +227,8 @@ promise_t HotStuffBase::async_deliver_blk(const uint256_t &blk_hash,
         if (qc)
             pms.push_back(async_fetch_blk(blk->get_qc_ref_hash(), &replica_id));
         /* the parents should be delivered */
-//        for (const auto &phash: blk->get_parent_hashes())
-//            pms.push_back(async_deliver_blk(phash, replica_id));
+        for (const auto &phash: blk->get_parent_hashes())
+            pms.push_back(async_deliver_blk(phash, replica_id));
         if (blk != get_genesis())
             pms.push_back(blk->verify(get_config(), vpool));
         promise::all(pms).then([this, blk]() {
@@ -617,6 +617,10 @@ void HotStuffBase::block_fetched(const block_t &blk, const ReplicaID replicaId) 
     });
 }
 
+void HotStuffBase::register_command_handler(const uint32_t cid, const uint256_t cmd) {
+    register_client_response_handler(cid, cmd);
+}
+
 
 HotStuffBase::~HotStuffBase() {}
 
@@ -644,19 +648,19 @@ void HotStuffBase::start(
         ec.dispatch();
 
     cmd_pending.reg_handler(ec, [this](cmd_queue_t &q) {
-        std::pair<uint256_t, commit_cb_t> e;
+        std::pair<std::pair<uint256_t, uint32_t>, commit_cb_t> e;
         while (q.try_dequeue(e))
         {
             ReplicaID proposer = pmaker->get_proposer();
             if (proposer != get_id()) continue;
 
-            const auto &cmd_hash = e.first;
-            cmd_pending_buffer.push(cmd_hash);
+            const auto &cmd = e.first;
+            cmd_pending_buffer.push(cmd);
 
-            auto it = decision_waiting.find(cmd_hash);
+            auto it = decision_waiting.find(cmd.first);
             if (it == decision_waiting.end())
             {
-                it = decision_waiting.insert(std::make_pair(cmd_hash, e.second)).first;
+                it = decision_waiting.insert(std::make_pair(cmd.first, e.second)).first;
             }
             else
             {
@@ -665,14 +669,24 @@ void HotStuffBase::start(
             if (cmd_pending_buffer.size() >= blk_size)
             {
                 std::vector<uint256_t> cmds;
+                std::vector<uint32_t> cids;
+//                uint256_t cmd;
+
                 for (uint32_t i = 0; i < blk_size; i++)
                 {
-                    cmds.push_back(cmd_pending_buffer.front());
+                    auto _cmd = cmd_pending_buffer.front();
+//                    auto cid = cmd_client_map.find(cmd);
+//                    if (cid == cmd_client_map.end()) continue;
+                    for (u_int8_t j = 0; j < 100; j++) {
+                        cmds.push_back(_cmd.first);
+                        cids.push_back(_cmd.second);
+                    }
                     cmd_pending_buffer.pop();
+//                    cmd_client_map.erase(cmd);
                 }
-                pmaker->beat().then([this, cmds = std::move(cmds)](ReplicaID proposer) {
+                pmaker->beat().then([this, cmds = std::move(cmds), cids = std::move(cids)](ReplicaID proposer) {
                     if (proposer == get_id())
-                        on_propose(cmds, pmaker->get_parents());
+                        on_propose(cmds, pmaker->get_parents(), cids);
                 });
                 return true;
             }

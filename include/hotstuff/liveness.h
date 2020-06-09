@@ -348,8 +348,8 @@ class PaceMakerDummyFixed: public PaceMakerDummy {
             /* FIXME: should extra data be the voter's id? */
             s << hsc->get_id();
             /* propose a block for leader election */
-            hsc->on_propose(std::vector<uint256_t>{},
-                            get_parents(), std::move(s));
+//            hsc->on_propose(std::vector<uint256_t>{},
+//                            get_parents(), std::move(s));
         }
 
         /* helper functions for a candidate */
@@ -600,8 +600,8 @@ class PaceMakerDummyFixed: public PaceMakerDummy {
             /* FIXME: should extra data be the voter's id? */
             s << hsc->get_id();
             /* propose a block for leader election */
-            hsc->on_propose(std::vector<uint256_t>{},
-                            get_parents(), std::move(s));
+//            hsc->on_propose(std::vector<uint256_t>{},
+//                            get_parents(), std::move(s));
         }
 
         /* helper functions for a candidate */

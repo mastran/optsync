@@ -98,6 +98,10 @@ class CommandDummy: public Command {
     bool verify() const override {
         return true;
     }
+
+    uint32_t get_cid() override {
+        return cid;
+    }
 };
 
 }

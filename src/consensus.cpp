@@ -114,31 +114,31 @@ bool HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, con
 }
 
 void HotStuffCore::check_commit(const block_t &blk) {
-//    std::vector<block_t> commit_queue;
-//    block_t b;
-//    for (b = blk; b->height > b_exec->height; b = b->parents[0])
-//    { /* TODO: also commit the uncles/aunts */
-//        commit_queue.push_back(b);
-//    }
+    std::vector<block_t> commit_queue;
+    block_t b;
+    for (b = blk; b->height > b_exec->height; b = b->parents[0])
+    { /* TODO: also commit the uncles/aunts */
+        commit_queue.push_back(b);
+    }
 
     // In responsive commit, a block could receive >3n/4 votes before its parent.
     // Hence, we need to change the logic as follows:
-//    if (b != b_exec && b->decision != 1)
-//        throw std::runtime_error("safety breached :( " +
-//                                std::string(*blk) + " " +
-//                                std::string(*b_exec));
-//    for (auto it = commit_queue.rbegin(); it != commit_queue.rend(); it++)
-//    {
-//        const block_t &blk = *it;
-//        if(blk->decision == 1)
-//            continue;
+    if (b != b_exec && b->decision != 1)
+        throw std::runtime_error("safety breached :( " +
+                                std::string(*blk) + " " +
+                                std::string(*b_exec));
+    for (auto it = commit_queue.rbegin(); it != commit_queue.rend(); it++)
+    {
+        const block_t &blk = *it;
+        if(blk->decision == 1)
+            continue;
         blk->decision = 1;
-//        do_consensus(blk);
+        do_consensus(blk);
         LOG_PROTO("commit %s", std::string(*blk).c_str());
         for (size_t i = 0; i < blk->cmds.size(); i++)
             do_decide(Finality(id, 1, i, blk->height,
                                 blk->cmds[i], blk->get_hash()));
-//    }
+    }
     b_exec = blk;
 }
 
@@ -261,10 +261,9 @@ void print_bytearray2(size_t size, uint8_t *arr){
     LOG_INFO("Datastream : %s", s.c_str());
 }
 
-
-
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
                             const std::vector<block_t> &parents,
+                            const std::vector<uint32_t> &cids,
                             bytearray_t &&extra) {
     if (view_trans)
     {
@@ -273,6 +272,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     }
     if (parents.empty())
         throw std::runtime_error("empty parents");
+
     for (const auto &_: parents) tails.erase(_);
     /* create the new block */
     block_t bnew = storage->add_blk(
@@ -281,7 +281,8 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
             view, // current view number
             parents[0]->height + 1,
             hqc.first,
-            nullptr
+            nullptr,
+            cids
         ));
     const uint256_t bnew_hash = bnew->get_hash();
     bnew->self_qc = create_quorum_cert(Vote::proof_obj_hash(bnew_hash));
@@ -295,7 +296,6 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     finished_propose[bnew] = true;
     Proposal prop(id, bnew, nullptr);
 //    _vote(bnew);
-    on_propose_(prop);
     /* broadcast to other replicas */
 //    do_broadcast_proposal(prop);
 
@@ -307,7 +307,6 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     bnew->serialize(s);
 
     chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
-
     uint256_t  blk_hash = bnew->get_hash();
     for(int i = 0; i < nreplicas; i++) {
         if (i != id) {
@@ -319,8 +318,10 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
         }
     }
     _vote(bnew);
+    on_propose_(prop);
 
-    on_qc_finish(bnew);
+    et.stop(true);
+    et.start();
 
     return bnew;
 }
@@ -371,6 +372,11 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     // check if the proposal extends the highest certified block
 
 //    if (opinion && !vote_disabled) _vote(bnew);
+    if (id != 0) {
+        for (size_t i = 0; i < bnew->cmds.size(); i++) {
+            register_command_handler(bnew->cids[i], bnew->cmds[i]);
+        }
+    }
 }
 
 void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {

@@ -113,6 +113,8 @@ class Command: public Serializable {
         s << "<cmd id=" << get_hex10(get_hash()) << ">";
         return std::move(s);
     }
+
+    virtual uint32_t get_cid() = 0;
 };
 
 using command_t = ArcObj<Command>;
@@ -130,6 +132,7 @@ class Block {
     friend HotStuffCore;
     std::vector<uint256_t> parent_hashes;
     std::vector<uint256_t> cmds;
+    std::vector<uint32_t> cids;
     quorum_cert_bt qc;
     uint256_t qc_ref_hash;
     bytearray_t extra;
@@ -173,6 +176,7 @@ class Block {
         uint32_t height,
         const block_t &qc_ref,
         quorum_cert_bt &&self_qc,
+        const std::vector<uint32_t> &cids,
         int8_t decision = 0):
             parent_hashes(get_hashes(parents)),
             cmds(cmds),
@@ -186,6 +190,7 @@ class Block {
             view(view),
             height(height),
             delivered(0),
+            cids(cids),
             decision(decision) {}
 
     void serialize(DataStream &s) const;

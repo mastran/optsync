@@ -80,6 +80,8 @@ class HotStuffApp: public HotStuff {
     /** The listen address for client RPC */
     NetAddr clisten_addr;
 
+    std::unordered_map<uint32_t, NetAddr> client_addr_map;
+
     std::unordered_map<const uint256_t, promise_t> unconfirmed;
 
     using conn_t = ClientNetwork<opcode_t>::conn_t;
@@ -93,6 +95,7 @@ class HotStuffApp: public HotStuff {
     salticidae::BoxObj<salticidae::ThreadCall> req_tcall;
 
     void client_request_cmd_handler(MsgReqCmd &&, const conn_t &);
+    void register_client_response_handler(uint32_t cid, const uint256_t &cmd_hash) override ;
 
     static command_t parse_cmd(DataStream &s) {
         auto cmd = new CommandDummy();
@@ -325,9 +328,10 @@ HotStuffApp::HotStuffApp(uint32_t blk_size,
 void HotStuffApp::client_request_cmd_handler(MsgReqCmd &&msg, const conn_t &conn) {
     const NetAddr addr = conn->get_addr();
     auto cmd = parse_cmd(msg.serialized);
+    client_addr_map[cmd->get_cid()] = addr;
     const auto &cmd_hash = cmd->get_hash();
     HOTSTUFF_LOG_DEBUG("processing %s", std::string(*cmd).c_str());
-    exec_command(cmd_hash, [this, addr](Finality fin) {
+    exec_command(cmd_hash, cmd->get_cid(), [this](Finality fin) {
         resp_queue.enqueue(fin);
     });
     /* the following function is executed on the dedicated thread for confirming commands */
@@ -339,6 +343,20 @@ void HotStuffApp::client_request_cmd_handler(MsgReqCmd &&msg, const conn_t &conn
         it->second.then([this, addr](const Finality &fin) {
             cn.send_msg(MsgRespCmd(std::move(fin)), addr);
         });
+    });
+}
+
+void HotStuffApp::register_client_response_handler(const uint32_t cid, const uint256_t &cmd_hash){
+    const NetAddr addr = this->client_addr_map[cid];
+    resp_tcall->async_call([this, cmd_hash, addr](salticidae::ThreadCall::Handle &) {
+        auto it = unconfirmed.find(cmd_hash);
+        if (it == unconfirmed.end()) {
+            it = unconfirmed.insert(
+                    std::make_pair(cmd_hash, promise_t([](promise_t &) {}))).first;
+            it->second.then([this, addr](const Finality &fin) {
+                cn.send_msg(MsgRespCmd(std::move(fin)), addr);
+            });
+        }
     });
 }
 

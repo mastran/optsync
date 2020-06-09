@@ -132,14 +132,19 @@ class Erasure {
         if(i == -1)
             return false;
 
-        for(i=0; i<k-1; i++) {
+        size_t j = 0;
+        for(i=0; i<k; i++) {
+            j+= blocksize;
+            if (j > size) break;
             bytearray_t arr(data[i], data[i]+blocksize);
             s << arr;
         }
 
-        extra = newsize - size;
-        bytearray_t arr(data[i], data[i]+blocksize-extra);
-        s << arr;
+        extra = j - size;
+        if (extra > 0){
+            bytearray_t arr(data[i], data[i]+blocksize-extra);
+            s << arr;
+        }
         return true;
     }
 };
