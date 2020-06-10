@@ -320,8 +320,8 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     _vote(bnew);
     on_propose_(prop);
 
-    et.stop(true);
-    et.start();
+//    et.stop(true);
+//    et.start();
 
     return bnew;
 }
@@ -385,6 +385,10 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
 
     uint256_t blk_hash = prop.blk_hash;
     insert_chunk(blk_hash, id, prop.chunk);
+
+    /*Todo: fix this*/
+    /*Quick hack to prevent replicas from broadcasting echo again.*/
+    if (prop.proposer != 0) return;
 
     //broadcast its share.
     Echo echo(id, prop.blk_hash, prop.chunk);
