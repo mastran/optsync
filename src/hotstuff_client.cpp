@@ -49,7 +49,7 @@ size_t max_async_num;
 int max_iter_num;
 uint32_t cid;
 uint32_t cnt = 0;
-uint8_t mult = 100;
+uint16_t mult = 10000;
 uint32_t nfaulty;
 
 struct Request {
@@ -115,7 +115,7 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
 #else
     struct timeval tv;
     gettimeofday(&tv, nullptr);
-    for(uint8_t i = 0; i < mult; i++)
+    for(uint16_t i = 0; i < mult; i++)
         elapsed.push_back(std::make_pair(tv, et.elapsed_sec));
 #endif
     waiting.erase(it);

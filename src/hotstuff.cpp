@@ -670,19 +670,15 @@ void HotStuffBase::start(
             {
                 std::vector<uint256_t> cmds;
                 std::vector<uint32_t> cids;
-//                uint256_t cmd;
 
                 for (uint32_t i = 0; i < blk_size; i++)
                 {
                     auto _cmd = cmd_pending_buffer.front();
-//                    auto cid = cmd_client_map.find(cmd);
-//                    if (cid == cmd_client_map.end()) continue;
-                    for (u_int8_t j = 0; j < 100; j++) {
+                    for (u_int16_t j = 0; j < 10000; j++) {
                         cmds.push_back(_cmd.first);
                         cids.push_back(_cmd.second);
                     }
                     cmd_pending_buffer.pop();
-//                    cmd_client_map.erase(cmd);
                 }
                 pmaker->beat().then([this, cmds = std::move(cmds), cids = std::move(cids)](ReplicaID proposer) {
                     if (proposer == get_id())
