@@ -121,6 +121,12 @@ void MsgEcho::postponed_parse(HotStuffCore *hsc) {
     serialized >> echo;
 }
 
+const opcode_t MsgCommit::opcode;
+MsgCommit::MsgCommit(const Commit &commit) { serialized << commit; }
+void MsgCommit::postponed_parse(HotStuffCore *hsc) {
+    serialized >> commit;
+}
+
 // TODO: improve this function
 void HotStuffBase::exec_command(uint256_t cmd_hash, uint32_t cid, commit_cb_t callback) {
     cmd_pending.enqueue(std::make_pair(std::make_pair(cmd_hash, cid), callback));
@@ -376,7 +382,13 @@ void HotStuffBase::echo_handler(MsgEcho &&msg, const Net::conn_t &conn) {
     on_receive_echo(echo);
 }
 
+void HotStuffBase::commit_handler(MsgCommit &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    msg.postponed_parse(this);
+    auto &commit = msg.commit;
 
+    finalize_block(commit.blk_hash);
+}
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
 #ifdef SYNCHS_NOTIMER
@@ -568,6 +580,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_view_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_propose_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::echo_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::commit_handler, this, _1, _2));
     pn.start();
     pn.listen(listen_addr);
 }
@@ -602,6 +615,17 @@ void HotStuffBase::do_status(const Status &status) {
         pn.send_msg(m, get_config().get_addr(next_proposer));
     else
         on_receive_status(status);
+}
+
+void HotStuffBase::wait_on_blk(const uint256_t &blk_hash){
+    add_blk_waiting(blk_hash);
+}
+
+void HotStuffBase::do_commit(const Commit &commit) {
+    ReplicaID proposer = pmaker->get_proposer();
+    MsgCommit m(commit);
+    if (proposer != get_id())
+        pn.send_msg(m, get_config().get_addr(proposer));
 }
 
 void HotStuffBase::block_fetched(const block_t &blk, const ReplicaID replicaId) {
@@ -639,7 +663,7 @@ void HotStuffBase::start(
     }
 
     /* ((n - 1) + 1 - 1) / 3 */
-    uint32_t nfaulty = peers.size() / 2;
+    nfaulty = peers.size() / 2;
     if (nfaulty == 0)
         LOG_WARN("too few replicas in the system to tolerate any failure");
     on_init(nfaulty, delta);
@@ -655,7 +679,8 @@ void HotStuffBase::start(
             if (proposer != get_id()) continue;
 
             const auto &cmd = e.first;
-            cmd_pending_buffer.push(cmd);
+            for (uint32_t i = 0; i < blk_size; i++)
+                cmd_pending_buffer.push(cmd);
 
             auto it = decision_waiting.find(cmd.first);
             if (it == decision_waiting.end())
@@ -674,15 +699,17 @@ void HotStuffBase::start(
                 for (uint32_t i = 0; i < blk_size; i++)
                 {
                     auto _cmd = cmd_pending_buffer.front();
-                    for (u_int16_t j = 0; j < 10000; j++) {
-                        cmds.push_back(_cmd.first);
-                        cids.push_back(_cmd.second);
-                    }
+                    cmds.push_back(_cmd.first);
+                    cids.push_back(_cmd.second);
+
                     cmd_pending_buffer.pop();
                 }
+                cmd_pending.enqueue(std::make_pair(std::make_pair(cmds[0], 1000), [](Finality fin) {}));
                 pmaker->beat().then([this, cmds = std::move(cmds), cids = std::move(cids)](ReplicaID proposer) {
-                    if (proposer == get_id())
+                    if (proposer == get_id()) {
                         on_propose(cmds, pmaker->get_parents(), cids);
+//                        begin_propose();
+                    }
                 });
                 return true;
             }
@@ -691,4 +718,28 @@ void HotStuffBase::start(
     });
 }
 
+void HotStuffBase::generate_command(std::vector<uint256_t> &cmds, std::vector<uint32_t> &cids) const {
+    static uint32_t cnt = 0;
+    auto cmd = new CommandDummy(1000, cnt++);
+    auto cmd_hash = cmd->get_hash();
+
+    for(size_t i =0; i <blk_size; i++) {
+        cmds.push_back(cmd_hash);
+        cids.push_back(0);
+    }
 }
+
+void HotStuffBase::begin_propose(){
+    for(uint32_t i = 0; i < 10; i++) {
+        std::vector<uint256_t> cmds;
+        std::vector<uint32_t> cids;
+        generate_command(cmds, cids);
+        on_propose(cmds, pmaker->get_parents(), cids);
+        cmds.clear();
+        cids.clear();
+        usleep(300);
+    }
+}
+
+}
+

@@ -40,7 +40,7 @@ struct Finality;
 struct Notify;
 struct NewProposal;
 struct Echo;
-
+struct Commit;
 
 /** Abstraction for HotStuff protocol state machine (without network implementation). */
 class HotStuffCore {
@@ -184,6 +184,7 @@ class HotStuffCore {
     virtual void do_broadcast_new_view(const Status &status)=0;
     virtual void do_broadcast_echo(const Echo &echo)=0;
     virtual void do_new_proposal(ReplicaID replicaId, const NewProposal &newProp) = 0;
+    virtual void do_commit(const Commit &commit) = 0;
 
     virtual void set_commit_timer(const block_t &blk, double t_sec) = 0;
     virtual void set_blame_timer(double t_sec) = 0;
@@ -197,6 +198,7 @@ class HotStuffCore {
     virtual void stop_status_timer() = 0;
 
     virtual void register_command_handler(const uint32_t cid, const uint256_t cmd) = 0;
+    virtual void wait_on_blk(const uint256_t &) = 0;
 
     /* The user plugs in the detailed instances for those
      * polymorphic data types. */
@@ -750,6 +752,40 @@ struct Echo: public Serializable {
         DataStream s;
         s << "<echo "
           << "rid=" << std::to_string(proposer) << " "
+          << "blk=" << get_hex10(blk_hash) << ">";
+        return std::move(s);
+    }
+};
+
+
+struct Commit: public Serializable {
+    ReplicaID replicaId;
+    uint256_t blk_hash;
+
+    Commit() = default;
+    Commit(ReplicaID replicaId,
+         uint256_t blk_hash):
+            replicaId(replicaId),
+            blk_hash(blk_hash)
+             {}
+
+    Commit(const Commit &other):
+            replicaId(other.replicaId),
+            blk_hash(other.blk_hash) {}
+
+    void serialize(DataStream &s) const override {
+        s << replicaId << blk_hash;
+    }
+
+    inline void unserialize(DataStream &s) override {
+        s >> replicaId;
+        s >> blk_hash;
+    }
+
+    operator std::string () const {
+        DataStream s;
+        s << "<commit "
+          << "rid=" << std::to_string(replicaId) << " "
           << "blk=" << get_hex10(blk_hash) << ">";
         return std::move(s);
     }

@@ -135,9 +135,11 @@ void HotStuffCore::check_commit(const block_t &blk) {
         blk->decision = 1;
         do_consensus(blk);
         LOG_PROTO("commit %s", std::string(*blk).c_str());
-        for (size_t i = 0; i < blk->cmds.size(); i++)
-            do_decide(Finality(id, 1, i, blk->height,
-                                blk->cmds[i], blk->get_hash()));
+//        for (size_t i = 0; i < blk->cmds.size(); i++)
+        /*Only respond to the first cmd as the blk contains the same cmds*/
+        do_decide(Finality(id, 1, 0, blk->height,
+                                blk->cmds[0], blk->get_hash()));
+        do_commit(Commit(id, blk->get_hash()));
     }
     b_exec = blk;
 }
@@ -239,28 +241,6 @@ void HotStuffCore::send_new_view() {
     _vote(hqc.first);
 }
 
-void print_bytearray(const uint256_t &blk_hash, int idx, bytearray_t &arr){
-    std::ostringstream ss;
-
-    for(int i= 0; i < arr.size(); i++){
-        ss << std::to_string(arr[i]) << ',';
-    }
-    std::string s = ss.str();
-
-    LOG_INFO("Data %s %d: %s", get_hex10(blk_hash).c_str(), idx, s.c_str());
-}
-
-void print_bytearray2(size_t size, uint8_t *arr){
-    std::ostringstream ss;
-
-    for(int i= 0; i < size; i++){
-        ss << std::to_string(arr[i]) << ',';
-    }
-    std::string s = ss.str();
-
-    LOG_INFO("Datastream : %s", s.c_str());
-}
-
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
                             const std::vector<block_t> &parents,
                             const std::vector<uint32_t> &cids,
@@ -287,6 +267,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     const uint256_t bnew_hash = bnew->get_hash();
     bnew->self_qc = create_quorum_cert(Vote::proof_obj_hash(bnew_hash));
     on_deliver_blk(bnew);
+    wait_on_blk(bnew_hash);
     LOG_PROTO("propose %s", std::string(*bnew).c_str());
     /* self-vote */
     if (bnew->height <= vheight) {
@@ -322,7 +303,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 
 //    et.stop(true);
 //    et.start();
-
+    chunk_array.clear();
     return bnew;
 }
 
@@ -372,10 +353,8 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     // check if the proposal extends the highest certified block
 
 //    if (opinion && !vote_disabled) _vote(bnew);
-    if (id != 0) {
-        for (size_t i = 0; i < bnew->cmds.size(); i++) {
-            register_command_handler(bnew->cids[i], bnew->cmds[i]);
-        }
+    if (id != 0 && bnew->cids[0] != 1000) {
+        register_command_handler(bnew->cids[0], bnew->cmds[0]);
     }
 }
 
@@ -457,6 +436,7 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
                 do_new_proposal(i, np);
             }
         }
+        this->chunks.erase(blk_hash);
     }
 }
 

@@ -144,6 +144,17 @@ struct MsgEcho {
     void postponed_parse(HotStuffCore *hsc);
 };
 
+struct MsgCommit {
+    static const opcode_t opcode = 0x11;
+    DataStream serialized;
+    Commit commit;
+    MsgCommit(const Commit &);
+    /** Only move the data to serialized, do not parse immediately. */
+    MsgCommit(DataStream &&s): serialized(std::move(s)) {}
+    /** Parse the serialized data to blks now, with `hsc->storage`. */
+    void postponed_parse(HotStuffCore *hsc);
+};
+
 
 using promise::promise_t;
 
@@ -214,6 +225,8 @@ class HotStuffBase: public HotStuffCore {
     TimerEvent viewtrans_timer;
     TimerEvent status_timer;
 
+    uint32_t nfaulty;
+
     private:
     /** whether libevent handle is owned by itself */
     bool ec_loop;
@@ -263,6 +276,7 @@ class HotStuffBase: public HotStuffCore {
     inline void new_view_handler(MsgNewView &&, const Net::conn_t &);
     inline void new_propose_handler(MsgNewPropose &&, const Net::conn_t &);
     inline void echo_handler(MsgEcho &&, const Net::conn_t &);
+    inline void commit_handler(MsgCommit &&, const Net::conn_t &);
 
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
@@ -272,6 +286,8 @@ class HotStuffBase: public HotStuffCore {
     inline promise_t verify_notify(Notify &notify);
 
     void block_fetched(const block_t &blk, const ReplicaID replicaId) override;
+    virtual void add_blk_waiting(uint256_t) = 0;
+    void do_commit(const Commit &commit) override ;
 
     template<typename T, typename M>
     void _do_broadcast(const T &t) {
@@ -316,7 +332,6 @@ class HotStuffBase: public HotStuffCore {
 //         });
     }
 
-
     void do_broadcast_blame(const Blame &blame) override {
         _do_broadcast<Blame, MsgBlame>(blame);
     }
@@ -347,13 +362,17 @@ class HotStuffBase: public HotStuffCore {
     void do_consensus(const block_t &blk) override;
 
     void register_command_handler(const uint32_t cid, const uint256_t cmd) override ;
+    void generate_command(std::vector<uint256_t> &, std::vector<uint32_t> &) const;
+    void begin_propose();
+    void wait_on_blk(const uint256_t &) override ;
 
     protected:
 
     /** Called to replicate the execution of a command, the application should
      * implement this to make transition for the application state. */
     virtual void state_machine_execute(const Finality &) = 0;
-    virtual void register_client_response_handler(const uint32_t, const uint256_t &cmd_hash) = 0;
+    virtual void register_client_response_handler(uint32_t, const uint256_t &cmd_hash) = 0;
+    virtual void finalize_block(uint256_t blk_hash) = 0;
 
     public:
     HotStuffBase(uint32_t blk_size,

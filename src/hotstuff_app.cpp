@@ -94,8 +94,14 @@ class HotStuffApp: public HotStuff {
     salticidae::BoxObj<salticidae::ThreadCall> resp_tcall;
     salticidae::BoxObj<salticidae::ThreadCall> req_tcall;
 
+    std::unordered_map<const uint256_t, std::pair<size_t, ElapsedTime>> waiting;
+    std::vector<std::pair<struct timeval, double>> elapsed;
+
     void client_request_cmd_handler(MsgReqCmd &&, const conn_t &);
     void register_client_response_handler(uint32_t cid, const uint256_t &cmd_hash) override ;
+
+    void add_blk_waiting(uint256_t blk_hash) override;
+    void finalize_block(uint256_t blk_hash) override;
 
     static command_t parse_cmd(DataStream &s) {
         auto cmd = new CommandDummy();
@@ -114,6 +120,7 @@ class HotStuffApp: public HotStuff {
         HOTSTUFF_LOG_INFO("replicated %s", std::string(fin).c_str());
 #endif
         resp_queue.enqueue(fin);
+        finalize_block(fin.blk_hash);
     }
 
 //#ifdef HOTSTUFF_AUTOCLI
@@ -358,6 +365,27 @@ void HotStuffApp::register_client_response_handler(const uint32_t cid, const uin
     }
 }
 
+void HotStuffApp::add_blk_waiting(const uint256_t blk_hash){
+    ElapsedTime et;
+    et.start();
+    waiting.insert(std::make_pair(blk_hash, std::make_pair(0, et)));
+}
+
+void HotStuffApp::finalize_block(uint256_t blk_hash){
+//    const std::lock_guard<std::mutex> lock(mu);
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    auto it = waiting.find(blk_hash);
+    if(it == waiting.end()) return;
+    auto &confirmed = it->second.first;
+    if (++confirmed <= nfaulty) return;
+
+    auto &et = it->second.second;
+    et.stop();
+    elapsed.emplace_back(std::make_pair(tv, et.elapsed_sec));
+    waiting.erase(it);
+}
+
 void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta) {
     ev_stat_timer = TimerEvent(ec, [this](TimerEvent &) {
         HotStuff::print_stat();
@@ -387,6 +415,16 @@ void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps
     resp_thread = std::thread([this]() { resp_ec.dispatch(); });
     /* enter the event main loop */
     ec.dispatch();
+
+#ifdef HOTSTUFF_ENABLE_BENCHMARK
+    for (const auto &e: elapsed)
+    {
+        char fmt[64];
+        struct tm *tmp = localtime(&e.first.tv_sec);
+        strftime(fmt, sizeof fmt, "%Y-%m-%d %H:%M:%S.%%06u [hotstuff info] %%.6f\n", tmp);
+        fprintf(stderr, fmt, e.first.tv_usec, e.second);
+    }
+#endif
 }
 
 void HotStuffApp::stop() {
