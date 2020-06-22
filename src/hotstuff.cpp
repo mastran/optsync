@@ -388,6 +388,8 @@ void HotStuffBase::commit_handler(MsgCommit &&msg, const Net::conn_t &conn) {
     auto &commit = msg.commit;
 
     finalize_block(commit.blk_hash);
+    block_t blk = storage->find_blk(commit.blk_hash);
+    on_commit_blk(blk);
 }
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
@@ -567,6 +569,7 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
         part_delivery_time(0),
         part_delivery_time_min(double_inf),
         part_delivery_time_max(0)
+
 {
     /* register the handlers for msg from replicas */
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::propose_handler, this, _1, _2));
@@ -650,7 +653,7 @@ HotStuffBase::~HotStuffBase() {}
 
 void HotStuffBase::start(
         std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas,
-        double delta, bool ec_loop) {
+        double delta, uint16_t backlog, bool ec_loop) {
     for (size_t i = 0; i < replicas.size(); i++)
     {
         auto &addr = replicas[i].first;
@@ -666,7 +669,7 @@ void HotStuffBase::start(
     nfaulty = peers.size() / 2;
     if (nfaulty == 0)
         LOG_WARN("too few replicas in the system to tolerate any failure");
-    on_init(nfaulty, delta);
+    on_init(nfaulty, delta, backlog);
     pmaker->init(this);
     if (ec_loop)
         ec.dispatch();
@@ -708,7 +711,6 @@ void HotStuffBase::start(
                 pmaker->beat().then([this, cmds = std::move(cmds), cids = std::move(cids)](ReplicaID proposer) {
                     if (proposer == get_id()) {
                         on_propose(cmds, pmaker->get_parents(), cids);
-//                        begin_propose();
                     }
                 });
                 return true;
@@ -716,29 +718,6 @@ void HotStuffBase::start(
         }
         return false;
     });
-}
-
-void HotStuffBase::generate_command(std::vector<uint256_t> &cmds, std::vector<uint32_t> &cids) const {
-    static uint32_t cnt = 0;
-    auto cmd = new CommandDummy(1000, cnt++);
-    auto cmd_hash = cmd->get_hash();
-
-    for(size_t i =0; i <blk_size; i++) {
-        cmds.push_back(cmd_hash);
-        cids.push_back(0);
-    }
-}
-
-void HotStuffBase::begin_propose(){
-    for(uint32_t i = 0; i < 10; i++) {
-        std::vector<uint256_t> cmds;
-        std::vector<uint32_t> cids;
-        generate_command(cmds, cids);
-        on_propose(cmds, pmaker->get_parents(), cids);
-        cmds.clear();
-        cids.clear();
-        usleep(300);
-    }
 }
 
 }

@@ -362,8 +362,6 @@ class HotStuffBase: public HotStuffCore {
     void do_consensus(const block_t &blk) override;
 
     void register_command_handler(const uint32_t cid, const uint256_t cmd) override ;
-    void generate_command(std::vector<uint256_t> &, std::vector<uint32_t> &) const;
-    void begin_propose();
     void wait_on_blk(const uint256_t &) override ;
 
     protected:
@@ -390,7 +388,7 @@ class HotStuffBase: public HotStuffCore {
 
     /* Submit the command to be decided. */
     void exec_command(uint256_t cmd_hash, uint32_t cid, commit_cb_t callback);
-    void start(std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas,double delta, bool ec_loop = false);
+    void start(std::vector<std::pair<NetAddr, pubkey_bt>> &&replicas, double delta, uint16_t backlog, bool ec_loop = false);
 
     size_t size() const { return peers.size(); }
     const auto &get_decision_waiting() const { return decision_waiting; }
@@ -462,11 +460,11 @@ class HotStuff: public HotStuffBase {
                     nworker,
                     netconfig) {}
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &replicas, double delta, bool ec_loop = false) {
+    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &replicas, double delta, uint16_t backlog, bool ec_loop = false) {
         std::vector<std::pair<NetAddr, pubkey_bt>> reps;
         for (auto &r: replicas)
             reps.push_back(std::make_pair(r.first, new PubKeyType(r.second)));
-        HotStuffBase::start(std::move(reps), delta, ec_loop);
+        HotStuffBase::start(std::move(reps), delta, backlog, ec_loop);
     }
 };
 

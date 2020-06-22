@@ -78,7 +78,9 @@ class HotStuffCore {
     /* == feature switches == */
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
-    salticidae::ElapsedTime et;
+
+    uint16_t backlog;
+    uint16_t blocks_proposed;
 
     /*Erasure Coded Chunks by height*/
     std::unordered_map<const uint256_t, std::unordered_map<ReplicaID, chunk_t>> chunks;
@@ -115,7 +117,7 @@ class HotStuffCore {
 
     /** Call to initialize the protocol, should be called once before all other
      * functions. */
-    void on_init(uint32_t nfaulty, double delta);
+    void on_init(uint32_t nfaulty, double delta, uint16_t backlog);
 
     /* TODO: better name for "delivery" ? */
     /** Call to inform the state machine that a block is ready to be handled.
@@ -248,6 +250,8 @@ class HotStuffCore {
     operator std::string () const;
     void set_vote_disabled(bool f) { vote_disabled = f; }
     virtual void set_status_timer(double t_sec) = 0;
+
+    void on_commit_blk(block_t blk);
 };
 
 

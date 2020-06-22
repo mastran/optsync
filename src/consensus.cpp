@@ -300,9 +300,8 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     }
     _vote(bnew);
     on_propose_(prop);
+    blocks_proposed++;
 
-//    et.stop(true);
-//    et.start();
     chunk_array.clear();
     return bnew;
 }
@@ -375,7 +374,7 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
 }
 
 bool HotStuffCore::insert_chunk(const uint256_t blk_hash, const ReplicaID replicaId, const chunk_t &chunk){
-    const std::lock_guard<std::mutex> lock(mu);
+//    const std::lock_guard<std::mutex> lock(mu);
     if (!this->chunks[blk_hash][replicaId]) {
         this->chunks[blk_hash][replicaId] = chunk;
         return true;
@@ -384,7 +383,7 @@ bool HotStuffCore::insert_chunk(const uint256_t blk_hash, const ReplicaID replic
 }
 
 size_t HotStuffCore::chunk_size(const uint256_t blk_hash){
-    const std::lock_guard<std::mutex> lock(mu);
+//    const std::lock_guard<std::mutex> lock(mu);
     return this->chunks[blk_hash].size();
 }
 
@@ -421,10 +420,8 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         DataStream d;
         Erasure::decode(nmajority, nfaulty, 8, arr, erasures, d);
 
-//        print_bytearray2(d.size(), d.data());
         Block _block;
         _block.unserialize(d, this);
-
         block_t _blk = storage->add_blk(std::move(_block), config);
 
         block_fetched(_blk, echo.proposer);
@@ -623,7 +620,7 @@ void HotStuffCore::on_status_timeout() {
 }
 
 /*** end HotStuff protocol logic ***/
-void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
+void HotStuffCore::on_init(uint32_t nfaulty, double delta, uint16_t backlog) {
     config.nfaulty = nfaulty;
     config.nmajority = config.nreplicas - nfaulty;
     config.nresponsive = (size_t) floor(3*config.nreplicas/4.0) + 1;
@@ -639,7 +636,8 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     hqc = std::make_pair(b0, b0->qc->clone());
     hqc_ancestor = std::make_pair(nullptr, nullptr);
 
-    et.start();
+    blocks_proposed = 0;
+    this->backlog = backlog;
 }
 
 void HotStuffCore::prune(uint32_t staleness) {
@@ -674,6 +672,7 @@ void HotStuffCore::add_replica(ReplicaID rid, const NetAddr &addr,
 
 promise_t HotStuffCore::async_qc_finish(const block_t &blk) {
 //    if (blk->voted.size() >= config.nmajority)
+    if (blocks_proposed < backlog)
         return promise_t([](promise_t &pm) {
             pm.resolve();
         });
@@ -768,6 +767,11 @@ HotStuffCore::operator std::string () const {
       << "view=" << std::to_string(view) << " "
       << "tails=" << std::to_string(tails.size()) << ">";
     return std::move(s);
+}
+
+void HotStuffCore::on_commit_blk(block_t blk) {
+    blocks_proposed--;
+    on_qc_finish(blk);
 }
 
 }

@@ -152,7 +152,7 @@ class HotStuffApp: public HotStuff {
                 const Net::Config &repnet_config,
                 const ClientNetwork<opcode_t>::Config &clinet_config);
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta);
+    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta, uint16_t backlog);
     void stop();
 };
 
@@ -190,6 +190,7 @@ int main(int argc, char **argv) {
     auto opt_clinworker = Config::OptValInt::create(8);
     auto opt_cliburst = Config::OptValInt::create(1000);
     auto opt_delta = Config::OptValDouble::create(1);
+    auto opt_backlog = Config::OptValInt::create(1000);
 
     config.add_opt("block-size", opt_blk_size, Config::SET_VAL);
     config.add_opt("parent-limit", opt_parent_limit, Config::SET_VAL);
@@ -209,6 +210,7 @@ int main(int argc, char **argv) {
     config.add_opt("clinworker", opt_clinworker, Config::SET_VAL, 'M', "the number of threads for client network");
     config.add_opt("cliburst", opt_cliburst, Config::SET_VAL, 'B', "");
     config.add_opt("delta", opt_delta, Config::SET_VAL, 'd', "maximum network delay");
+    config.add_opt("backlog", opt_backlog, Config::SET_VAL, 'd', "maximum proposal backlog");
     config.add_opt("help", opt_help, Config::SWITCH_ON, 'h', "show this help info");
 
     EventContext ec;
@@ -285,7 +287,7 @@ int main(int argc, char **argv) {
     ev_sigint.add(SIGINT);
     ev_sigterm.add(SIGTERM);
 
-    papp->start(reps, opt_delta->get());
+    papp->start(reps, opt_delta->get(), opt_backlog->get());
     elapsed.stop(true);
     return 0;
 }
@@ -386,7 +388,7 @@ void HotStuffApp::finalize_block(uint256_t blk_hash){
     waiting.erase(it);
 }
 
-void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta) {
+void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta, uint16_t backlog) {
     ev_stat_timer = TimerEvent(ec, [this](TimerEvent &) {
         HotStuff::print_stat();
         HotStuffApp::print_stat();
@@ -403,7 +405,7 @@ void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps
     HOTSTUFF_LOG_INFO("blk_size = %lu", blk_size);
     HOTSTUFF_LOG_INFO("conns = %lu", HotStuff::size());
     HOTSTUFF_LOG_INFO("** starting the event loop...");
-    HotStuff::start(reps, delta);
+    HotStuff::start(reps, delta, backlog);
     cn.reg_conn_handler([this](const salticidae::ConnPool::conn_t &_conn, bool connected) {
         auto conn = salticidae::static_pointer_cast<conn_t::type>(_conn);
         if (connected)
