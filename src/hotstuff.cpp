@@ -382,6 +382,20 @@ void HotStuffBase::echo_handler(MsgEcho &&msg, const Net::conn_t &conn) {
     on_receive_echo(echo);
 }
 
+void HotStuffBase::propose_on_qc(){
+    if (pmaker->get_proposer() != id) return;
+    std::vector<uint256_t> cmds;
+    std::vector<uint32_t> cids;
+
+    auto cmd = cmd_pending_buffer.front();
+    for (uint32_t i = 0; i < blk_size; i++)
+    {
+        cmds.push_back(cmd.first);
+        cids.push_back(cmd.second);
+    }
+    on_propose(cmds, pmaker->get_parents(), cids);
+}
+
 void HotStuffBase::commit_handler(MsgCommit &&msg, const Net::conn_t &conn) {
     const NetAddr &peer = conn->get_peer();
     msg.postponed_parse(this);
@@ -389,7 +403,6 @@ void HotStuffBase::commit_handler(MsgCommit &&msg, const Net::conn_t &conn) {
 
     finalize_block(commit.blk_hash);
     block_t blk = storage->find_blk(commit.blk_hash);
-    on_commit_blk(blk);
 }
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {

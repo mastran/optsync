@@ -288,6 +288,7 @@ class HotStuffBase: public HotStuffCore {
     void block_fetched(const block_t &blk, const ReplicaID replicaId) override;
     virtual void add_blk_waiting(uint256_t) = 0;
     void do_commit(const Commit &commit) override ;
+    void propose_on_qc() override ;
 
     template<typename T, typename M>
     void _do_broadcast(const T &t) {

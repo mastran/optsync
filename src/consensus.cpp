@@ -242,7 +242,7 @@ void HotStuffCore::send_new_view() {
 }
 
 block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
-                            const std::vector<block_t> &parents,
+                            const std::vector<block_t> &_parents,
                             const std::vector<uint32_t> &cids,
                             bytearray_t &&extra) {
     if (view_trans)
@@ -250,9 +250,9 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
         LOG_WARN("PaceMaker tries to propose during view transition");
         return nullptr;
     }
-    if (parents.empty())
-        throw std::runtime_error("empty parents");
-
+//    if (parents.empty())
+//        throw std::runtime_error("empty parents");
+    std::vector<block_t> parents{b_proposed};
     for (const auto &_: parents) tails.erase(_);
     /* create the new block */
     block_t bnew = storage->add_blk(
@@ -303,6 +303,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     blocks_proposed++;
 
     chunk_array.clear();
+    b_proposed = bnew;
     return bnew;
 }
 
@@ -472,8 +473,10 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         blk->cert_type = SYNCHRONOUS_CERT;
         qc->compute();
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
-//         Start proposing new blocks
 //        on_qc_finish(blk);
+
+//      Start proposing new blocks
+        propose_on_qc();
 
     } else
         if(qsize == config.nresponsive){
@@ -637,6 +640,7 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta, uint16_t backlog) {
     hqc_ancestor = std::make_pair(nullptr, nullptr);
 
     blocks_proposed = 0;
+    b_proposed = b0;
     this->backlog = backlog;
 }
 
@@ -767,11 +771,6 @@ HotStuffCore::operator std::string () const {
       << "view=" << std::to_string(view) << " "
       << "tails=" << std::to_string(tails.size()) << ">";
     return std::move(s);
-}
-
-void HotStuffCore::on_commit_blk(block_t blk) {
-    blocks_proposed--;
-    on_qc_finish(blk);
 }
 
 }

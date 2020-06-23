@@ -52,6 +52,7 @@ class HotStuffCore {
     std::pair<block_t, quorum_cert_bt> hqc;   /**< highest QC */
     std::pair<block_t, quorum_cert_bt> hqc_ancestor;   /**< highest responsive ancestor */
     block_t b_exec;                            /**< last executed block */
+    block_t b_proposed;                         /**< last proposed block */
     uint32_t vheight;          /**< height of the block last voted for */
     uint32_t view;             /**< the current view number */
     /* Q: does the proposer retry the same block in a new view? */
@@ -251,7 +252,7 @@ class HotStuffCore {
     void set_vote_disabled(bool f) { vote_disabled = f; }
     virtual void set_status_timer(double t_sec) = 0;
 
-    void on_commit_blk(block_t blk);
+    virtual void propose_on_qc() = 0 ;
 };
 
 
