@@ -253,6 +253,7 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
             hqc.first,
             nullptr
         ));
+    bnew->slow_path = slow_path;
     const uint256_t bnew_hash = bnew->get_hash();
     bnew->self_qc = create_quorum_cert(Vote::proof_obj_hash(bnew_hash));
     on_deliver_blk(bnew);
@@ -262,6 +263,8 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     if (bnew->height <= vheight)
         throw std::runtime_error("new block should be higher than vheight");
     vheight = bnew->height;
+    if(bnew->height % 1000 == 0) slow_path = !slow_path;
+
     finished_propose[bnew] = true;
     _vote(bnew);
     on_propose_(prop);
@@ -313,11 +316,14 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
         on_qc_finish(bnew->qc_ref);
     finished_propose[bnew] = true;
     on_receive_proposal_(prop);
+    if (bnew->slow_path && id >= config.nmajority) return;
+    LOG_INFO("In slow_path ? %d", bnew->slow_path);
+
     // check if the proposal extends the highest certified block
     if (opinion && !vote_disabled) _vote(bnew);
 
     //Forward proposals
-    do_broadcast_proposal(prop);
+//    do_broadcast_proposal(prop);
 }
 
 void HotStuffCore::on_receive_vote(const Vote &vote) {
@@ -516,6 +522,7 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     b0->qc_ref = b0;
     hqc = std::make_pair(b0, b0->qc->clone());
     hqc_ancestor = std::make_pair(nullptr, nullptr);
+    slow_path = true;
 }
 
 void HotStuffCore::prune(uint32_t staleness) {

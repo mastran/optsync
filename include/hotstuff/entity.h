@@ -132,6 +132,7 @@ class Block {
     quorum_cert_bt qc;
     uint256_t qc_ref_hash;
     bytearray_t extra;
+    bool slow_path;
 
     // highest view in which block gets certified
     uint32_t view;

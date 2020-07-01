@@ -75,6 +75,9 @@ class HotStuffCore {
     /** always vote negatively, useful for some PaceMakers */
     bool vote_disabled;
 
+    /*If slow path, only replicas with ids in range 0..f (i.e., f+1 replicas) will vote*/
+    bool slow_path;
+
     block_t get_delivered_blk(const uint256_t &blk_hash);
     void sanity_check_delivered(const block_t &blk);
     void check_commit(const block_t &_hqc);

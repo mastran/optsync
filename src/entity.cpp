@@ -31,6 +31,7 @@ void Block::serialize(DataStream &s) const {
         s << (uint8_t)1 << *qc << qc_ref_hash;
     else
         s << (uint8_t)0;
+    s << slow_path;
     s << htole((uint32_t)extra.size()) << extra;
 }
 
@@ -55,6 +56,7 @@ void Block::unserialize(DataStream &s, HotStuffCore *hsc) {
         qc = hsc->parse_quorum_cert(s);
         s >> qc_ref_hash;
     } else qc = nullptr;
+    s >> slow_path;
     s >> n;
     n = letoh(n);
     if (n == 0)
