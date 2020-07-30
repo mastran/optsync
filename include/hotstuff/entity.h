@@ -339,6 +339,82 @@ class EntityStorage {
     }
 };
 
+struct Probe: public Serializable {
+    ReplicaID replicaId;
+    uint32_t probeId;
+    std::vector<uint256_t> data;
+    uint16_t load;
+
+    bool forward;
+    bool startProbing;
+    bool endProbing;
+
+    Probe(): forward(false), startProbing(true), endProbing(false), load(1) {}
+
+    Probe(const std::vector<uint256_t> &data, uint32_t probeId, ReplicaID replicaId, uint16_t load):
+        data(data), probeId(probeId),
+        startProbing(true), endProbing(false),
+        replicaId(replicaId), load(load){}
+
+    void serialize(DataStream &s) const override {
+        s << probeId << replicaId << load;
+        s << forward << startProbing << endProbing;
+        s << htole((uint32_t)data.size());
+        for (auto d: data)
+            s << d;
+    };
+
+    void unserialize(DataStream &s) override {
+        s >> probeId >> replicaId >> load;
+        s >> forward >> startProbing >> endProbing;
+
+        uint32_t n;
+        s >> n;
+        n = letoh(n);
+        data.resize(n);
+        for (auto &d: data)
+            s >> d;
+    }
+
+    uint256_t get_hash(){
+        DataStream s;
+        s << probeId;
+//        s << replicaId;
+        return s.get_hash();
+    }
+
+};
+
+struct ProbeOk: public Serializable{
+    ReplicaID replicaId;
+    uint32_t probeId;
+    bool endProbe;
+    uint16_t load;
+    part_cert_bt cert;
+    HotStuffCore *hsc;
+
+    ProbeOk(): replicaId(0), probeId(0), hsc(nullptr), endProbe(false), load(1){}
+    ProbeOk(ReplicaID replicaId, uint32_t probeId, part_cert_bt &&cert, uint16_t load, HotStuffCore *hsc):
+        replicaId(replicaId), probeId(probeId), load(load),
+        cert(std::move(cert)), endProbe(false), hsc(hsc){}
+
+    ProbeOk(const ProbeOk &other):
+            replicaId(other.replicaId),
+            probeId(other.probeId), load(other.load),
+            cert(other.cert ? other.cert->clone() : nullptr),
+            hsc(other.hsc) {}
+
+    ProbeOk(ProbeOk &&other) = default;
+
+    void serialize(DataStream &s) const override {
+        s << replicaId << probeId << endProbe << load << *cert;
+    }
+
+    void unserialize(DataStream &s) override;
+
+    promise_t verify(VeriPool &vpool) const;
+};
+
 }
 
 #endif

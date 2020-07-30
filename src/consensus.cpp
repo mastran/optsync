@@ -289,6 +289,10 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
 
     chunkarray_t chunk_array = Erasure::encode(nmajority, nfaulty, 8, s);
     uint256_t  blk_hash = bnew->get_hash();
+
+    /* Record blk proposal to check if computed Delta still works. */
+    record_echo_broadcast(blk_hash);
+
     for(int i = 0; i < nreplicas; i++) {
         if (i != id) {
             NewProposal np(id, blk_hash, chunk_array[i]);
@@ -369,6 +373,10 @@ void HotStuffCore::on_receive_new_proposal(const NewProposal &prop) {
     /*Quick hack to prevent replicas from broadcasting echo again.*/
     if (prop.proposer != 0) return;
 
+    // Reply with EchoOk
+    EchoOk echoOk(id, blk_hash);
+    do_send_echo_ok(prop.proposer, echoOk);
+
     //broadcast its share.
     Echo echo(id, prop.blk_hash, prop.chunk);
     do_broadcast_echo(echo);
@@ -393,6 +401,11 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
     LOG_PROTO("got %s", std::string(echo).c_str());
 
     uint256_t blk_hash = echo.blk_hash;
+
+    // Reply with EchoOk
+    EchoOk echoOk(id, blk_hash);
+    do_send_echo_ok(echo.proposer, echoOk);
+
     block_t blk = storage->find_blk(blk_hash);
     if (blk != nullptr) return;
 
@@ -428,7 +441,7 @@ void HotStuffCore::on_receive_echo(const Echo &echo) {
         block_fetched(_blk, echo.proposer);
 
         // Broadcast its shares to all replicas.
-        for(int i = 0; i < nreplicas; i++) {
+        for(size_t i = 0; i < nreplicas; i++) {
             if (i != id && this->chunks[blk_hash][i]) {
                 NewProposal np(id, blk_hash, this->chunks[blk_hash][i]);
                 do_new_proposal(i, np);
@@ -478,15 +491,15 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
 //      Start proposing new blocks
         propose_on_qc();
 
-    } else
-        if(qsize == config.nresponsive){
-        blk->cert_type = RESPONSIVE_CERT;
-        qc->compute();
-
-        check_commit(blk);
-        stop_commit_timer(blk->height);
-        update_hqc(blk, qc, blk, qc);
-        _notify(blk, qc);
+//    } else
+//        if(qsize == config.nresponsive){
+//        blk->cert_type = RESPONSIVE_CERT;
+//        qc->compute();
+//
+//        check_commit(blk);
+//        stop_commit_timer(blk->height);
+//        update_hqc(blk, qc, blk, qc);
+//        _notify(blk, qc);
     }
 }
 

@@ -41,6 +41,7 @@ struct Notify;
 struct NewProposal;
 struct Echo;
 struct Commit;
+struct EchoOk;
 
 /** Abstraction for HotStuff protocol state machine (without network implementation). */
 class HotStuffCore {
@@ -65,7 +66,6 @@ class HotStuffCore {
     std::unordered_set<ReplicaID> blamed;
 
     /* === auxilliary variables === */
-    privkey_bt priv_key;            /**< private key for signing votes */
     std::set<block_t, BlockHeightCmp> tails;   /**< set of tail blocks */
     ReplicaConfig config;                   /**< replica configuration */
     /* === async event queues === */
@@ -104,6 +104,7 @@ class HotStuffCore {
 
     protected:
     ReplicaID id;                  /**< identity of the replica itself */
+    privkey_bt priv_key;            /**< private key for signing votes */
 
     public:
     BoxObj<EntityStorage> storage;
@@ -188,6 +189,7 @@ class HotStuffCore {
     virtual void do_broadcast_echo(const Echo &echo)=0;
     virtual void do_new_proposal(ReplicaID replicaId, const NewProposal &newProp) = 0;
     virtual void do_commit(const Commit &commit) = 0;
+    virtual void do_send_echo_ok(const ReplicaID replicaId, const EchoOk &echoOk) = 0;
 
     virtual void set_commit_timer(const block_t &blk, double t_sec) = 0;
     virtual void set_blame_timer(double t_sec) = 0;
@@ -252,7 +254,10 @@ class HotStuffCore {
     void set_vote_disabled(bool f) { vote_disabled = f; }
     virtual void set_status_timer(double t_sec) = 0;
 
-    virtual void propose_on_qc() = 0 ;
+    virtual void propose_on_qc() = 0;
+
+    protected:
+    virtual void record_echo_broadcast(const uint256_t blk_hash) = 0;
 };
 
 
@@ -757,6 +762,38 @@ struct Echo: public Serializable {
         DataStream s;
         s << "<echo "
           << "rid=" << std::to_string(proposer) << " "
+          << "blk=" << get_hex10(blk_hash) << ">";
+        return std::move(s);
+    }
+};
+
+
+struct EchoOk: public Serializable {
+    ReplicaID replicaId;
+    uint256_t blk_hash;
+
+    EchoOk() = default;
+    EchoOk(ReplicaID replicaId,
+         uint256_t blk_hash):
+            replicaId(replicaId),
+            blk_hash(blk_hash){}
+
+    EchoOk(const EchoOk &other):
+            replicaId(other.replicaId),
+            blk_hash(other.blk_hash) {}
+
+    void serialize(DataStream &s) const override {
+        s << replicaId << blk_hash;
+    }
+
+    inline void unserialize(DataStream &s) override {
+        s >> replicaId >> blk_hash;
+    }
+
+    operator std::string () const {
+        DataStream s;
+        s << "<echo_ok "
+          << "rid=" << std::to_string(replicaId) << " "
           << "blk=" << get_hex10(blk_hash) << ">";
         return std::move(s);
     }

@@ -28,6 +28,7 @@
 #include "hotstuff/util.h"
 #include "hotstuff/consensus.h"
 #include "hotstuff/liveness.h"
+#include "hotstuff/delta.h"
 
 namespace hotstuff {
 
@@ -156,6 +157,35 @@ struct MsgCommit {
 };
 
 
+struct MsgProbe{
+    static const opcode_t opcode = 0x12;
+    DataStream serialized;
+    Probe probe;
+
+    MsgProbe(const Probe &);
+    MsgProbe(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgProbeOk{
+    static const opcode_t opcode = 0x13;
+    DataStream serialized;
+    ProbeOk probeOk;
+    MsgProbeOk(const ProbeOk &);
+    MsgProbeOk(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+struct MsgEchoOk{
+    static const opcode_t opcode = 0x14;
+    DataStream serialized;
+    EchoOk echoOk;
+    MsgEchoOk(const EchoOk &);
+    MsgEchoOk(DataStream &&s): serialized(std::move(s)) {}
+    void postponed_parse(HotStuffCore *hsc);
+};
+
+
 using promise::promise_t;
 
 class HotStuffBase;
@@ -277,6 +307,9 @@ class HotStuffBase: public HotStuffCore {
     inline void new_propose_handler(MsgNewPropose &&, const Net::conn_t &);
     inline void echo_handler(MsgEcho &&, const Net::conn_t &);
     inline void commit_handler(MsgCommit &&, const Net::conn_t &);
+    inline void probe_handler(MsgProbe &&, const Net::conn_t &);
+    inline void probe_ok_handler(MsgProbeOk &&, const Net::conn_t &);
+    inline void echo_ok_handler(MsgEchoOk &&, const Net::conn_t &);
 
     /** fetches full block data */
     inline void req_blk_handler(MsgReqBlock &&, const Net::conn_t &);
@@ -345,6 +378,18 @@ class HotStuffBase: public HotStuffCore {
         _do_broadcast<Status, MsgNewView>(status);
     }
 
+    void do_broadcast_probe(const Probe &probe) {
+        _do_broadcast<Probe, MsgProbe>(probe);
+    }
+
+    void do_send_probe_ok(ReplicaID replicaId, const ProbeOk &probeOk) {
+        pn.send_msg(MsgProbeOk(probeOk), get_config().get_addr(replicaId));
+    }
+
+    void do_send_echo_ok(ReplicaID replicaId, const EchoOk &echoOk) override{
+        pn.send_msg(MsgEchoOk(echoOk), get_config().get_addr(replicaId));
+    }
+
     void do_status(const Status &status) override;
 
     void set_commit_timer(const block_t &blk, double t_sec) override;
@@ -408,6 +453,19 @@ class HotStuffBase: public HotStuffCore {
     promise_t async_fetch_blk(const uint256_t &blk_hash, const NetAddr *replica_id, bool fetch_now = true);
     /** Returns a promise resolved (with block_t blk) when Block is delivered (i.e. prefix is fetched). */
     promise_t async_deliver_blk(const uint256_t &blk_hash,  const NetAddr &replica_id);
+
+    private:
+    Delta delta;
+    TimerEvent probe_timer;
+    TimerEvent probe_end_timer;
+    void begin_probe();
+    void stop_probe();
+    void on_receive_probe(Probe &);
+    void on_receive_probe_ok(const ProbeOk &);
+    void on_receive_echo_ok(const EchoOk &);
+
+protected:
+    void record_echo_broadcast(const uint256_t blk_hash) override;
 };
 
 /** HotStuff protocol (templated by cryptographic implementation). */

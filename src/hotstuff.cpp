@@ -127,6 +127,27 @@ void MsgCommit::postponed_parse(HotStuffCore *hsc) {
     serialized >> commit;
 }
 
+const opcode_t MsgProbe::opcode;
+MsgProbe::MsgProbe(const Probe &probe) {serialized << probe;}
+void MsgProbe::postponed_parse(HotStuffCore *hsc) {
+    serialized >> probe;
+}
+
+
+const opcode_t MsgProbeOk::opcode;
+MsgProbeOk::MsgProbeOk(const ProbeOk &probeOk) {serialized << probeOk;}
+void MsgProbeOk::postponed_parse(HotStuffCore *hsc) {
+    probeOk.hsc = hsc;
+    serialized >> probeOk;
+}
+
+const opcode_t MsgEchoOk::opcode;
+MsgEchoOk::MsgEchoOk(const EchoOk &probeOk) {serialized << probeOk;}
+void MsgEchoOk::postponed_parse(HotStuffCore *hsc) {
+    serialized >> echoOk;
+}
+
+
 // TODO: improve this function
 void HotStuffBase::exec_command(uint256_t cmd_hash, uint32_t cid, commit_cb_t callback) {
     cmd_pending.enqueue(std::make_pair(std::make_pair(cmd_hash, cid), callback));
@@ -402,7 +423,33 @@ void HotStuffBase::commit_handler(MsgCommit &&msg, const Net::conn_t &conn) {
     auto &commit = msg.commit;
 
     finalize_block(commit.blk_hash);
-    block_t blk = storage->find_blk(commit.blk_hash);
+//    block_t blk = storage->find_blk(commit.blk_hash);
+}
+
+void HotStuffBase::probe_handler(MsgProbe &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    msg.postponed_parse(this);
+    auto &probe = msg.probe;
+    on_receive_probe(probe);
+}
+
+void HotStuffBase::probe_ok_handler(MsgProbeOk &&msg, const Net::conn_t &conn) {
+    const NetAddr &peer = conn->get_peer();
+    msg.postponed_parse(this);
+
+    RcObj<ProbeOk> v(new ProbeOk(std::move(msg.probeOk)));
+    promise::all(std::vector<promise_t>{
+            v->verify(vpool)
+    }).then([this, v=std::move(v)](const promise::values_t values) {
+        if (promise::any_cast<bool>(values[0]))
+            on_receive_probe_ok(*v);
+    });
+}
+
+void HotStuffBase::echo_ok_handler(MsgEchoOk &&msg, const Net::conn_t &conn) {
+    msg.postponed_parse(this);
+    auto &probe = msg.echoOk;
+    on_receive_echo_ok(probe);
 }
 
 void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
@@ -415,7 +462,8 @@ void HotStuffBase::set_commit_timer(const block_t &blk, double t_sec) {
             on_commit_timeout(blk);
             stop_commit_timer(height);
         });
-    timer.add(t_sec);
+//    timer.add(t_sec);
+    timer.add(delta.get_curDelta());
 #endif
 }
 
@@ -597,6 +645,10 @@ HotStuffBase::HotStuffBase(uint32_t blk_size,
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::new_propose_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::echo_handler, this, _1, _2));
     pn.reg_handler(salticidae::generic_bind(&HotStuffBase::commit_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::probe_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::probe_ok_handler, this, _1, _2));
+    pn.reg_handler(salticidae::generic_bind(&HotStuffBase::echo_ok_handler, this, _1, _2));
+    pn.start();
     pn.start();
     pn.listen(listen_addr);
 }
@@ -687,6 +739,13 @@ void HotStuffBase::start(
     if (ec_loop)
         ec.dispatch();
 
+    // init timer
+    this->delta.init(id, replicas.size(), backlog);
+    probe_timer = TimerEvent(ec, [this](TimerEvent &) {
+        begin_probe();
+    });
+    probe_timer.add(5);
+
     cmd_pending.reg_handler(ec, [this](cmd_queue_t &q) {
         std::pair<std::pair<uint256_t, uint32_t>, commit_cb_t> e;
         while (q.try_dequeue(e))
@@ -731,6 +790,78 @@ void HotStuffBase::start(
         }
         return false;
     });
+}
+
+void HotStuffBase::record_echo_broadcast(uint256_t blk_hash){
+    delta.add_echo_waiting(blk_hash);
+}
+
+void HotStuffBase::begin_probe(){
+    if(pmaker->get_proposer() != id) return;
+    probe_end_timer = TimerEvent(ec, [this](TimerEvent &) { stop_probe();});
+    probe_end_timer.add(6); /* Todo: Read from configuration*/
+    delta.start_probe();
+    for (uint8_t i = 0 ; i < delta.get_current_load(); i++) {
+        auto probe = delta.get_current_probe();
+        delta.add_waiting_probe(probe.probeId);
+        do_broadcast_probe(probe);
+    }
+}
+
+void HotStuffBase::on_receive_probe(Probe &probe) {
+    ProbeOk probeOk(id, probe.probeId, create_part_cert(*priv_key, probe.get_hash()),
+                    probe.load, this);
+    if (probe.endProbing)
+        probeOk.endProbe = true;
+
+    do_send_probe_ok(probe.replicaId, probeOk);
+    if(!probe.forward) {
+        probe.forward = true;
+        probe.replicaId = id;
+        delta.add_waiting_probe(probe.probeId);
+        do_broadcast_probe(probe);
+    }
+}
+
+void HotStuffBase::on_receive_probe_ok(const ProbeOk &probeOk) {
+    auto is_probe_qc = delta.on_receive_probe_ok(probeOk);
+    if(pmaker->get_proposer() == id){
+        if (delta.isProbing() and is_probe_qc){
+            auto probe = delta.get_current_probe();
+            delta.add_waiting_probe(probe.probeId);
+            do_broadcast_probe(probe);
+        }
+    }
+
+    if(probeOk.endProbe && is_probe_qc) {
+        if (delta.isDecidingProbe(probeOk.load)) {
+            delta.setDeltaNLoad();
+            LOG_INFO("Delta Set: %.3fms", delta.get_curDelta()*1000);
+        }else {
+            delta.increase_load();
+            if (pmaker->get_proposer() == id) {
+                probe_timer = TimerEvent(ec, [this](TimerEvent &) {begin_probe();});
+                probe_timer.add(1); // Starting probing again in a second with increased load.
+            }
+        }
+    }
+}
+
+void HotStuffBase::stop_probe(){
+    delta.stop_probe();
+    auto probe = delta.get_current_probe();
+    probe.endProbing = true;
+    delta.add_waiting_probe(probe.probeId);
+    do_broadcast_probe(probe);
+}
+
+void HotStuffBase::on_receive_echo_ok(const EchoOk &echoOk){
+    delta.on_receive_echo_ok(echoOk.blk_hash);
+    if (pmaker->get_proposer() == id){
+        if (!delta.isCurDeltaValid()){
+            LOG_WARN("Current Delta is invalid!");
+        }
+    }
 }
 
 }

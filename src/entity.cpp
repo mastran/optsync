@@ -100,4 +100,19 @@ uint256_t Block::_get_hash() {
     return s.get_hash();
 }
 
+promise_t ProbeOk::verify(VeriPool &vpool) const {
+    assert(hsc != nullptr);
+    DataStream s;
+    s << probeId;
+    uint256_t hash = s.get_hash();
+    return cert->verify(hsc->get_config().get_pubkey(replicaId), vpool).then([this, hash](bool result) {
+        return result && cert->get_obj_hash() == hash;
+    });
+}
+
+void ProbeOk::unserialize(DataStream &s) {
+    s >> replicaId >> probeId >> endProbe >> load;
+    cert = hsc->parse_part_cert(s);
+}
+
 }
