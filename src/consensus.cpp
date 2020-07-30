@@ -486,20 +486,20 @@ void HotStuffCore::on_receive_vote(const Vote &vote) {
         blk->cert_type = SYNCHRONOUS_CERT;
         qc->compute();
         update_hqc(blk, qc, hqc_ancestor.first, hqc_ancestor.second);
-//        on_qc_finish(blk);
+        on_qc_finish(blk);
 
 //      Start proposing new blocks
         propose_on_qc();
 
-//    } else
-//        if(qsize == config.nresponsive){
-//        blk->cert_type = RESPONSIVE_CERT;
-//        qc->compute();
-//
-//        check_commit(blk);
-//        stop_commit_timer(blk->height);
-//        update_hqc(blk, qc, blk, qc);
-//        _notify(blk, qc);
+    } else
+        if(qsize == config.nresponsive){
+        blk->cert_type = RESPONSIVE_CERT;
+        qc->compute();
+
+        check_commit(blk);
+        stop_commit_timer(blk->height);
+        update_hqc(blk, qc, blk, qc);
+        _notify(blk, qc);
     }
 }
 

@@ -58,6 +58,7 @@ add_library(hotstuff
     src/consensus.cpp
     src/hotstuff.cpp
     src/erasure.cpp
+    src/delta.cpp
     )
 
 option(BUILD_SHARED "build shared library." OFF)
