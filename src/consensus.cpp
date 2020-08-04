@@ -94,8 +94,8 @@ bool HotStuffCore::update_hqc(const block_t &_hqc, const quorum_cert_bt &qc, con
     // Both blocks must be from same view.
     //assert(hva_blk == nullptr || hva_blk->view == _hqc->view);
 
-    uint32_t height_hqc_ancestor = (hqc_ancestor.first != nullptr) ? hqc_ancestor.first->get_height(): -1;
-    uint32_t height_ra_blk = (hva_blk != nullptr) ? hva_blk->get_height(): -1;
+    uint32_t height_hqc_ancestor = (hqc_ancestor.first != nullptr) ? hqc_ancestor.first->get_height(): 0;
+    uint32_t height_ra_blk = (hva_blk != nullptr) ? hva_blk->get_height(): 0;
 
     if (_hqc->view > hqc.first->view ||
             (_hqc->view == hqc.first->view && height_ra_blk > height_hqc_ancestor) ||
