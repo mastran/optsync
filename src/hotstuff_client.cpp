@@ -30,6 +30,7 @@
 #include "hotstuff/client.h"
 
 using salticidae::Config;
+using salticidae::TimerEvent;
 
 using hotstuff::ReplicaID;
 using hotstuff::NetAddr;
@@ -44,12 +45,15 @@ using hotstuff::opcode_t;
 using hotstuff::command_t;
 
 EventContext ec;
+TimerEvent req_timer;
+
 ReplicaID proposer;
 size_t max_async_num;
 int max_iter_num;
 uint32_t cid;
 uint32_t cnt = 0;
 uint32_t nfaulty;
+double timeout;
 
 struct Request {
     command_t cmd;
@@ -99,6 +103,7 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
     if (it == waiting.end()) return;
     et.stop();
     if (++it->second.confirmed <= nfaulty) return; // wait for f + 1 ack
+
 #ifndef HOTSTUFF_ENABLE_BENCHMARK
     HOTSTUFF_LOG_INFO("got %s, wall: %.3f, cpu: %.3f",
                         std::string(fin).c_str(),
@@ -110,8 +115,24 @@ void client_resp_cmd_handler(MsgRespCmd &&msg, const Net::conn_t &) {
 #endif
     waiting.erase(it);
 
-    while (try_send());
+//    while (try_send());
 
+}
+
+void interval_based_propose(){
+//    size_t num = max_async_num - waiting.size();
+    size_t num = max_async_num;
+    for (size_t i = 0; i < num; i++)
+        try_send(false);
+}
+
+void set_req_timer(){
+    req_timer = TimerEvent(ec, [](TimerEvent &){
+        interval_based_propose();
+        req_timer.clear();
+        set_req_timer();
+    });
+    req_timer.add(timeout);
 }
 
 //#ifdef HOTSTUFF_AUTOCLI
@@ -134,6 +155,7 @@ int main(int argc, char **argv) {
     auto opt_max_iter_num = Config::OptValInt::create(100);
     auto opt_max_async_num = Config::OptValInt::create(10);
     auto opt_cid = Config::OptValInt::create(-1);
+    auto opt_timeout = Config::OptValDouble::create(0.010);
 
     auto shutdown = [&](int) { ec.stop(); };
     salticidae::SigEvent ev_sigint(ec, shutdown);
@@ -152,10 +174,13 @@ int main(int argc, char **argv) {
     config.add_opt("replica", opt_replicas, Config::APPEND);
     config.add_opt("iter", opt_max_iter_num, Config::SET_VAL);
     config.add_opt("max-async", opt_max_async_num, Config::SET_VAL);
+    config.add_opt("timeout", opt_timeout, Config::SET_VAL);
+
     config.parse(argc, argv);
     auto idx = opt_idx->get();
     max_iter_num = opt_max_iter_num->get();
     max_async_num = opt_max_async_num->get();
+    timeout = opt_timeout->get();
     std::vector<std::pair<std::string, std::string>> raw;
     for (const auto &s: opt_replicas->get())
     {
@@ -178,6 +203,7 @@ int main(int argc, char **argv) {
     nfaulty = (replicas.size() - 1) / 2;
     HOTSTUFF_LOG_INFO("nfaulty = %zu", nfaulty);
     connect_all();
+    set_req_timer();
     while (try_send());
     ec.dispatch();
 

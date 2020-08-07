@@ -593,6 +593,9 @@ void HotStuffBase::start(
     if (ec_loop)
         ec.dispatch();
 
+    /* Init path timer to switch paths every 5s*/
+    set_path_timer();
+
     cmd_pending.reg_handler(ec, [this](cmd_queue_t &q) {
         std::pair<uint256_t, commit_cb_t> e;
         while (q.try_dequeue(e))
@@ -629,6 +632,15 @@ void HotStuffBase::start(
         }
         return false;
     });
+}
+
+void HotStuffBase::set_path_timer() {
+    path_timer = TimerEvent(ec, [this](TimerEvent &){
+        on_path_switch_timeout();
+        path_timer.clear();
+        if(pmaker->get_proposer() == id) set_path_timer();
+    });
+    path_timer.add(5);
 }
 
 }

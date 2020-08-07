@@ -227,6 +227,7 @@ class HotStuffCore {
     operator std::string () const;
     void set_vote_disabled(bool f) { vote_disabled = f; }
     virtual void set_status_timer(double t_sec) = 0;
+    void on_path_switch_timeout();
 };
 
 

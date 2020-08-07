@@ -263,8 +263,6 @@ block_t HotStuffCore::on_propose(const std::vector<uint256_t> &cmds,
     if (bnew->height <= vheight)
         throw std::runtime_error("new block should be higher than vheight");
     vheight = bnew->height;
-    if(bnew->height % 1000 == 0) slow_path = !slow_path;
-
     finished_propose[bnew] = true;
     _vote(bnew);
     on_propose_(prop);
@@ -317,11 +315,9 @@ void HotStuffCore::on_receive_proposal(const Proposal &prop) {
     finished_propose[bnew] = true;
     on_receive_proposal_(prop);
     if (bnew->slow_path && id >= config.nmajority) return;
-    LOG_INFO("In slow_path ? %d", bnew->slow_path);
 
     // check if the proposal extends the highest certified block
     if (opinion && !vote_disabled) _vote(bnew);
-
     //Forward proposals
 //    do_broadcast_proposal(prop);
 }
@@ -522,7 +518,7 @@ void HotStuffCore::on_init(uint32_t nfaulty, double delta) {
     b0->qc_ref = b0;
     hqc = std::make_pair(b0, b0->qc->clone());
     hqc_ancestor = std::make_pair(nullptr, nullptr);
-    slow_path = true;
+    slow_path = false;
 }
 
 void HotStuffCore::prune(uint32_t staleness) {
@@ -651,6 +647,10 @@ HotStuffCore::operator std::string () const {
       << "view=" << std::to_string(view) << " "
       << "tails=" << std::to_string(tails.size()) << ">";
     return std::move(s);
+}
+
+void HotStuffCore::on_path_switch_timeout() {
+    slow_path = !slow_path;
 }
 
 }

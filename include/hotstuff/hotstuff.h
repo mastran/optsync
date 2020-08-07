@@ -193,6 +193,8 @@ class HotStuffBase: public HotStuffCore {
     TimerEvent viewtrans_timer;
     TimerEvent status_timer;
 
+    TimerEvent path_timer;
+
     private:
     /** whether libevent handle is owned by itself */
     bool ec_loop;
@@ -313,6 +315,8 @@ class HotStuffBase: public HotStuffCore {
 
     void do_decide(Finality &&) override;
     void do_consensus(const block_t &blk) override;
+
+    void set_path_timer();
 
     protected:
 
