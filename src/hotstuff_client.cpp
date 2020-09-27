@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
     std::vector<std::pair<std::string, std::string>> raw;
     for (const auto &s: opt_replicas->get())
     {
-        auto res = salticidae::trim_all(salticidae::split(s, "-"));
+        auto res = salticidae::trim_all(salticidae::split(s, ","));
         if (res.size() != 2)
             throw HotStuffError("format error");
         raw.push_back(std::make_pair(res[0], res[1]));

@@ -1,5 +1,7 @@
 #include <error.h>
 #include <iostream>
+#include <mcl/bn256.hpp>
+
 #include "salticidae/util.h"
 #include "hotstuff/crypto.h"
 #include "pbc/pbc.h"
@@ -9,6 +11,13 @@ using hotstuff::privkey_bt;
 using hotstuff::pubkey_bt;
 
 using namespace std;
+using namespace mcl::bn256;
+
+void KeyGen(Fr& s, G2& pub, const G2& Q)
+{
+    s.setRand();
+    G2::mul(pub, Q, s); // pub = sQ
+}
 
 int main(int argc, char **argv) {
     Config config("hotstuff.conf");
@@ -17,37 +26,21 @@ int main(int argc, char **argv) {
     config.add_opt("num", opt_n, Config::SET_VAL);
     config.parse(argc, argv);
 
-    const char *paramFileName = "pairing.param";
-    FILE *sysParamFile = fopen(paramFileName, "r");
-    if (sysParamFile == NULL) {
-        error(1, 0, "Can't open the parameter file ");
-    }
-
     int n = opt_n->get();
     if (n < 1)
         error(1, 0, "n must be >0");
 
-    pairing_t e;
-    char s[8192];
-    size_t count = fread(s, 1, 8192, sysParamFile);
-    fclose(sysParamFile);
-    if (count)
-        if (pairing_init_set_buf(e, s, count)) {
-            error(1, 0, "invalid pairing file");
-        }
+    initPairing();
+    G2 Q;
+    mapToG2(Q, 1);
 
-    element_t g, priv, pub;
-    element_init_G2(g, e);
-    element_init_G2(pub, e);
-    element_init_Zr(priv, e);
-
-    element_random(g);
-    element_printf("g: %B\n", g);
+    Fr s;
+    G2 pub;
+    std::cout << "g: " << Q.serializeToHexStr() << endl;
     while (n--)
     {
-        element_random(priv);
-        element_pow_zn(pub, g, priv);
-        element_printf("pub: %B\n", pub);
-        element_printf("sec: %B\n", priv);
+        KeyGen(s, pub, Q);
+        std::cout << "pub: " << pub.serializeToHexStr() << endl;
+        std::cout << "sec: " << s.serializeToHexStr() << endl;
     }
 }

@@ -71,44 +71,35 @@ pubkey_bt PrivKeyBLS::get_pubkey() const {
     return new PubKeyBLS(*this);
 }
 
-QuorumCertBLS::QuorumCertBLS(){
-    auto ctx = BLSContext::getInstance();
-    element_init_G1(sigs, ctx->getPairing());
-}
 
 QuorumCertBLS::QuorumCertBLS(const ReplicaConfig &config, const uint256_t &obj_hash):
     QuorumCert(), obj_hash(obj_hash), rids(config.nreplicas) {
+    sigs.clear();
     rids.clear();
-    auto ctx = BLSContext::getInstance();
-    element_init_G1(sigs, ctx->getPairing());
 }
 
 bool QuorumCertBLS::verify(const ReplicaConfig &config){
     //Todo: maintain a variable to store the number of sigs
     HOTSTUFF_LOG_DEBUG("checking quorum cert, obj_hash=%s", get_hex10(obj_hash).c_str());
     auto ctx = BLSContext::getInstance();
-    element_t t1, t2, t3, h;
-    auto e = ctx->getPairing();
     auto g = ctx->getGenerator();
-    element_init_G1(h, e);
 
+    GT t1, t2, t3;
+    G1 Hm;
     bytearray_t bt = obj_hash;
-    element_from_hash(h, (char *)bt.data(), bt.size());
-    element_init_GT(t1, e);
-    element_init_GT(t2, e);
-    element_init_GT(t3, e);
+    std::string str(bt.begin(), bt.end());
+    Hash(Hm, str);
 
-    element_pairing(t3, sigs, g);
-
+    pairing(t3, sigs, g);
     for (size_t i = 0; i < rids.size(); i++){
         if (rids.get(i))
         {
-            element_pairing(t1, h, *(element_t *) static_cast<const PubKeyBLS &>(config.get_pubkey(i)).pubkey);
-            element_mul(t2, t2, t1);
+            pairing(t1, Hm, static_cast<const PubKeyBLS &>(config.get_pubkey(i)).pubkey);
+            t2 += t1;
         }
     }
 
-    return element_cmp(t2, t3);
+    return t2 == t3;
 }
 
 promise_t QuorumCertBLS::verify(const ReplicaConfig &config, VeriPool &vpool) {
@@ -126,17 +117,22 @@ promise_t QuorumCertBLS::verify(const ReplicaConfig &config, VeriPool &vpool) {
     if(!vpm.size()) return promise_t([](promise_t &pm) { pm.resolve(true); });
 
     return promise::all(vpm).then([this](const promise::values_t &values) {
-        element_t t1, t2;
+        GT t1, t2;
         auto ctx = BLSContext::getInstance();
-        element_init_GT(t1, ctx->getPairing());
-        element_init_GT(t2, ctx->getPairing());
-        element_pairing(t1, sigs, ctx->getGenerator());
+        auto g = ctx->getGenerator();
+        pairing(t1, sigs, g);
 
         for (const auto &v: values)
-            element_mul(t2, t2, *(element_t *)promise::any_cast<GT>(v).t);
+            t2 += promise::any_cast<GT>(v);
 
-        return (bool) element_cmp(t1, t2);
+        return t1 ==  t2;
     });
+}
+
+void Hash(G1& P, const std::string& m){
+    Fp t;
+    t.setHashOf(m);
+    mapToG1(P, t);
 }
 
 }

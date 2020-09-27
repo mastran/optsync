@@ -393,7 +393,7 @@ class HotStuff: public HotStuffBase {
     public:
     HotStuff(uint32_t blk_size,
             ReplicaID rid,
-            const bytearray_t &raw_privkey,
+            const std::string &raw_privkey,
             NetAddr listen_addr,
             pacemaker_bt pmaker,
             EventContext ec = EventContext(),
@@ -408,7 +408,7 @@ class HotStuff: public HotStuffBase {
                     nworker,
                     netconfig) {}
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &replicas, double delta, bool ec_loop = false) {
+    void start(const std::vector<std::pair<NetAddr, std::string>> &replicas, double delta, bool ec_loop = false) {
         std::vector<std::pair<NetAddr, pubkey_bt>> reps;
         for (auto &r: replicas)
             reps.push_back(std::make_pair(r.first, new PubKeyType(r.second)));

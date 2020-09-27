@@ -47,7 +47,7 @@ if __name__ == "__main__":
                for ip in pub_ips
                for i in range(iter)]
     p = subprocess.Popen([keygen_bin, '--num', str(len(replicas))],
-                        stdout=subprocess.PIPE, stderr=open(os.devnull, 'w'))
+                         stdout=subprocess.PIPE, stderr=open(os.devnull, 'w'))
 
     generator = p.stdout.readline()[3:-1]
     keys = [[p.stdout.readline()[5:-1], p.stdout.readline()[5:-1]] for _ in range(len(replicas))]
@@ -57,7 +57,7 @@ if __name__ == "__main__":
         main_conf.write("pace-maker = {}\n".format(args.pace_maker))
     main_conf.write("generator = {}\n".format(generator))
     for r in zip(replicas, keys, itertools.count(0)):
-        main_conf.write("replica = {}- {}\n".format(r[0], r[1][0]))
+        main_conf.write("replica = {}, {}\n".format(r[0], r[1][0]))
         r_conf_name = "{}-sec{}.conf".format(prefix, r[2])
         nodes.write("{}:{}\t{}\n".format(r[2], rep_pub[r[2]], r_conf_name))
         r_conf = open(base_path + r_conf_name, 'w')

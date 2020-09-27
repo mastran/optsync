@@ -24,6 +24,9 @@
 #include "hotstuff/type.h"
 #include "hotstuff/task.h"
 #include "pbc/pbc.h"
+#include <mcl/bn256.hpp>
+
+using namespace mcl::bn256;
 
 namespace hotstuff {
 
@@ -428,8 +431,7 @@ class QuorumCertSecp256k1: public QuorumCert {
 
 class BLSContext {
     static BLSContext *instance;
-    pairing_t e;
-    element_t g;
+    G2 g;
 
     BLSContext() {}
 
@@ -440,23 +442,12 @@ public:
         return instance;
     }
 
-    void initParams(const FILE * buf, const char* gen, unsigned short base=10) {
-        char s[8192];
-        size_t count = fread(s, 1, 8192, *(FILE **) &buf);
-
-        if (count)
-            if (pairing_init_set_buf(e, s, count)) {
-                throw std::invalid_argument("invalid pairing file");
-            }
-        element_init_G2(g, e);
-        element_set_str(g, gen, base);
+    void initParams(const std::string& gen) {
+        initPairing();
+        g.deserializeHexStr(gen);
     }
 
-    inline pairing_t& getPairing(){
-        return e;
-    }
-
-    inline element_t& getGenerator(){
+    inline G2 getGenerator(){
         return g;
     }
 };
@@ -466,34 +457,29 @@ class PubKeyBLS;
 class PrivKeyBLS: public PrivKey {
     friend class PubKeyBLS;
     friend class BLSSig;
-    element_t privKey;
+    Fr privKey;
 
 public:
-    PrivKeyBLS(): PrivKey() {
-        const auto ctx = BLSContext::getInstance();
-        element_init_Zr(privKey, ctx->getPairing());
-    }
+    PrivKeyBLS(): PrivKey() {}
 
-    PrivKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PrivKey() {
-        const auto ctx = BLSContext::getInstance();
-        element_init_Zr(privKey, ctx->getPairing());
-        element_set_str(privKey, (const char *)raw_bytes.data(), base);
+    PrivKeyBLS(const std::string &str): PrivKey() {
+        privKey.deserializeHexStr(str);
     }
 
     void serialize(DataStream &s) const override {
-        int n = element_length_in_bytes_compressed(*(element_t *)privKey);
-        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
-        element_to_bytes_compressed(data, *(element_t *)privKey);
+        std::string str = privKey.serializeToHexStr();
+        uint8_t n = str.size();
+        auto *cstr = (unsigned char *)str.c_str();
         s << n;
-        s.put_data(data, data+n);
+        s.put_data(cstr, cstr+n);
     }
 
     void unserialize(DataStream &s) override {
-        int n;
+        uint8_t n;
         s >> n;
-        auto base = s.get_data_inplace(n);
-        bytearray_t  data = bytearray_t(base, base + n);
-        element_from_bytes_compressed(privKey, data.data());
+        auto base = (const char *)s.get_data_inplace(n);
+        std::string str(base);
+        privKey.deserializeHexStr(str);
     }
 
     pubkey_bt get_pubkey() const override;
@@ -506,40 +492,34 @@ class PubKeyBLS: public PubKey {
     friend class BLSSig;
     friend class QuorumCertBLS;
     friend class QuorumVeriTask;
-    element_t pubkey;
+    G2 pubkey;
 
 public:
-    PubKeyBLS(): PubKey() {
-        const auto ctx = BLSContext::getInstance();
-        element_init_G2(pubkey, ctx->getPairing());
-    }
+    PubKeyBLS(): PubKey() {}
 
-    PubKeyBLS(const bytearray_t &raw_bytes, unsigned short base=16): PubKey() {
-        const auto ctx = BLSContext::getInstance();
-        element_init_G2(pubkey, ctx->getPairing());
-        element_set_str(pubkey, (const char *)raw_bytes.data(), base);
+    PubKeyBLS(const std::string &str): PubKey() {
+        pubkey.deserializeHexStr(str);
     }
 
     PubKeyBLS(const PrivKeyBLS &priv_key): PubKey() {
         const auto ctx = BLSContext::getInstance();
-        element_init_G2(pubkey, ctx->getPairing());
-        element_pow_zn(pubkey, ctx->getGenerator(), *(element_t *)priv_key.privKey);
+        G2::mul(pubkey, ctx->getGenerator(), priv_key.privKey);
     }
 
     void serialize(DataStream &s) const override {
-        uint8_t n = element_length_in_bytes_compressed(*(element_t *)pubkey);
-        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
-        element_to_bytes_compressed(data, *(element_t *)pubkey);
+        std::string str = pubkey.serializeToHexStr();
+        uint8_t n = str.size();
+        auto *cstr = (unsigned char *)str.c_str();
         s << n;
-        s.put_data(data, data+n);
+        s.put_data(cstr, cstr+n);
     }
 
     void unserialize(DataStream &s) override {
         uint8_t n;
         s >> n;
-        auto base = s.get_data_inplace(n);
-        bytearray_t  data = bytearray_t(base, base + n);
-        element_from_bytes_compressed(pubkey, data.data());
+        auto base = (const char *)s.get_data_inplace(n);
+        std::string str(base);
+        pubkey.deserializeHexStr(str);
     }
 
     PubKeyBLS *clone() override {
@@ -547,10 +527,11 @@ public:
     }
 };
 
+void Hash(G1& P, const std::string& m);
 
 class BLSSig: public Serializable {
     friend class QuorumCertBLS;
-    element_t sig;
+    G1 sig;
 
     static void check_msg_length(const bytearray_t &msg) {
         if (msg.size() != 32)
@@ -558,61 +539,44 @@ class BLSSig: public Serializable {
     }
 
 public:
-    BLSSig(): Serializable()  {
-        const auto ctx = BLSContext::getInstance();
-        element_init_G1(sig, ctx->getPairing());
-    }
+    BLSSig(): Serializable()  {}
 
     BLSSig(const uint256_t &digest, const PrivKeyBLS &priv_key):  Serializable() {
-        const auto ctx = BLSContext::getInstance();
-        element_init_G1(sig, ctx->getPairing());
         sign(digest, priv_key);
     }
 
     void serialize(DataStream &s) const override {
-        uint8_t n = element_length_in_bytes_compressed(*(element_t *)sig);
-        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
-        element_to_bytes_compressed(data, *(element_t *)sig);
+        std::string str = sig.serializeToHexStr();
+        uint8_t n = str.size();
+        auto *cstr = (unsigned char *)str.c_str();
         s << n;
-        s.put_data(data, data+n);
+        s.put_data(cstr, cstr+str.size());
     }
 
     void unserialize(DataStream &s) override {
         uint8_t n;
         s >> n;
-        auto base = s.get_data_inplace(n);
-        bytearray_t  data = bytearray_t(base, base + n);
-        element_from_bytes_compressed(sig, data.data());
+        auto base = (const char *)s.get_data_inplace(n);
+        std::string str(base);
+        sig.deserializeHexStr(str);
     }
 
     void sign(const bytearray_t &msg, const PrivKeyBLS &priv_key) {
-        check_msg_length(msg);
-        auto ctx = BLSContext::getInstance();
-        element_t h;
-        element_init_G1(h, ctx->getPairing());
-        element_from_hash(h, (char *)msg.data(), msg.size());
-        //h^secret_key is the signature
-        element_pow_zn(sig, h, *(element_t *)priv_key.privKey);
+        G1 Hm;
+        std::string str(msg.begin(), msg.end());
+        Hash(Hm, str);
+        G1::mul(sig, Hm, priv_key.privKey);
     }
 
     bool verify(const bytearray_t &msg, const PubKeyBLS &pub_key) {
         auto ctx = BLSContext::getInstance();
-        element_t t1, t2, h;
-        auto e = ctx->getPairing();
-        auto g = ctx->getGenerator();
-        element_init_GT(t1, e);
-        element_init_GT(t2, e);
-        element_init_G1(h, e);
-
-        //verification part 1
-        element_pairing(t1, sig, g);
-
-        //verification part 2
-        //should match above
-        element_from_hash(h, (char *)msg.data(), msg.size());
-        element_pairing(t2, h, *(element_t *)pub_key.pubkey);
-
-        return (bool) element_cmp(t1, t2);
+        Fp12 e1, e2;
+        G1 Hm;
+        std::string str(msg.begin(), msg.end());
+        Hash(Hm, str);
+        pairing(e1, sig, ctx->getGenerator()); // e1 = e(sign, Q)
+        pairing(e2, Hm, pub_key.pubkey); // e2 = e(Hm, sQ)
+        return e1 == e2;
     }
 };
 
@@ -673,18 +637,17 @@ public:
 class QuorumCertBLS: public QuorumCert {
     uint256_t obj_hash;
     salticidae::Bits rids;
-    element_t sigs;
+    G1 sigs;
 
-public:
-    QuorumCertBLS();
+    public:
+    QuorumCertBLS() = default;
     QuorumCertBLS(const ReplicaConfig &config, const uint256_t &obj_hash);
 
     void add_part(ReplicaID rid, const PartCert &pc) override {
         if (pc.get_obj_hash() != obj_hash)
             throw std::invalid_argument("PartCert does match the block hash");
         auto _pc = static_cast<const PartCertBLS &>(pc);
-
-        element_mul(sigs, sigs, *(element_t *)_pc.sig);
+        sigs += _pc.sig;
         rids.set(rid);
     }
 
@@ -701,41 +664,32 @@ public:
 
     void serialize(DataStream &s) const override {
         s << obj_hash << rids;
-        uint8_t n = element_length_in_bytes_compressed(*(element_t *)sigs);
-        auto *data = (unsigned char *) malloc(sizeof(unsigned char) *n);
-        element_to_bytes_compressed(data, *(element_t *)sigs);
+        std::string str = sigs.serializeToHexStr();
+        uint8_t n = str.size();
+        auto *cstr = (unsigned char *)str.c_str();
         s << n;
-        s.put_data(data, data+n);
+        s.put_data(cstr, cstr+str.size());
     }
 
     void unserialize(DataStream &s) override {
         s >> obj_hash >> rids;
         uint8_t n;
         s >> n;
-        auto base = s.get_data_inplace(n);
-        bytearray_t data = bytearray_t(base, base + n);
-        element_from_bytes_compressed(sigs, data.data());
+        auto base = (const char *)s.get_data_inplace(n);
+        std::string str(base);
+        sigs.deserializeHexStr(str);
     }
 };
 
 class MsgHashBLS {
     friend class QuorumCertBLS;
     friend class QuorumVeriTask;
-    element_t h;
+    G1 Hm;
 
     MsgHashBLS(const bytearray_t &arr){
-        auto ctx = BLSContext::getInstance();
-        element_init_G1(h, ctx->getPairing());
-        element_from_hash(h, (char *)arr.data(), arr.size());
+        std::string str(arr.begin(), arr.end());
+        Hash(Hm, str);
     }
-};
-
-class GT{
-    friend class QuorumCertBLS;
-    friend class QuorumVeriTask;
-    element_t t;
-
-    GT() = default;
 };
 
 class QuorumVeriTask: public VeriTask {
@@ -744,14 +698,12 @@ class QuorumVeriTask: public VeriTask {
     GT t1;
 public:
     QuorumVeriTask(MsgHashBLS &msgHash, const PubKeyBLS &pubkey):
-            msgHash(msgHash), pubkey(pubkey) {
-        auto ctx = BLSContext::getInstance();
-        element_init_GT(t1.t, ctx->getPairing());
-    }
+            msgHash(msgHash), pubkey(pubkey) {}
+
     virtual ~QuorumVeriTask() = default;
 
     std::any verify() override {
-        element_pairing(t1.t, msgHash.h, *(element_t *)pubkey.pubkey);
+        pairing(t1, msgHash.Hm, pubkey.pubkey);
         return t1;
     };
 };

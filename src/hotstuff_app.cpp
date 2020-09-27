@@ -135,7 +135,7 @@ class HotStuffApp: public HotStuff {
                 double stat_period,
                 double impeach_timeout,
                 ReplicaID idx,
-                const bytearray_t &raw_privkey,
+                const std::string &raw_privkey,
                 NetAddr plisten_addr,
                 NetAddr clisten_addr,
                 hotstuff::pacemaker_bt pmaker,
@@ -144,7 +144,7 @@ class HotStuffApp: public HotStuff {
                 const Net::Config &repnet_config,
                 const ClientNetwork<opcode_t>::Config &clinet_config);
 
-    void start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta);
+    void start(const std::vector<std::pair<NetAddr, std::string>> &reps, double delta);
     void stop();
 };
 
@@ -214,16 +214,16 @@ int main(int argc, char **argv) {
     }
 
     auto bls_ctx = hotstuff::BLSContext::getInstance();
-    FILE *sysParamFile = fopen("pairing.param", "r");
-    bls_ctx->initParams(sysParamFile, opt_generator->get().c_str());
-    fclose(sysParamFile);
+//    FILE *sysParamFile = fopen("pairing.param", "r");
+    bls_ctx->initParams(opt_generator->get());
+//    fclose(sysParamFile);
 
     auto idx = opt_idx->get();
     auto client_port = opt_client_port->get();
     std::vector<std::pair<std::string, std::string>> replicas;
     for (const auto &s: opt_replicas->get())
     {
-        auto res = trim_all(split(s, "-"));
+        auto res = trim_all(split(s, ","));
         if (res.size() != 2)
             throw HotStuffError("invalid replica info");
         replicas.push_back(std::make_pair(res[0], res[1]));
@@ -261,12 +261,11 @@ int main(int argc, char **argv) {
         .burst_size(opt_cliburst->get())
         .nworker(opt_clinworker->get());
 
-    bytearray_t privKey(opt_privkey->get().begin(), opt_privkey->get().end());
     papp = new HotStuffApp(opt_blk_size->get(),
                         opt_stat_period->get(),
                         opt_imp_timeout->get(),
                         idx,
-                        privKey,
+                        opt_privkey->get(),
                         plisten_addr,
                         NetAddr("0.0.0.0", client_port),
                         std::move(pmaker),
@@ -274,12 +273,12 @@ int main(int argc, char **argv) {
                         opt_nworker->get(),
                         repnet_config,
                         clinet_config);
-    std::vector<std::pair<NetAddr, bytearray_t>> reps;
+    std::vector<std::pair<NetAddr, std::string>> reps;
     for (auto &r: replicas)
     {
         auto p = split_ip_port_cport(r.first);
-        bytearray_t bt(r.second.begin(), r.second.end());
-        reps.push_back(std::make_pair(NetAddr(p.first), bt));
+//        bytearray_t bt(r.second.begin(), r.second.end());
+        reps.push_back(std::make_pair(NetAddr(p.first), r.second));
     }
     auto shutdown = [&](int) { papp->stop(); };
     salticidae::SigEvent ev_sigint(ec, shutdown);
@@ -296,7 +295,7 @@ HotStuffApp::HotStuffApp(uint32_t blk_size,
                         double stat_period,
                         double impeach_timeout,
                         ReplicaID idx,
-                        const bytearray_t &raw_privkey,
+                        const std::string &raw_privkey,
                         NetAddr plisten_addr,
                         NetAddr clisten_addr,
                         hotstuff::pacemaker_bt pmaker,
@@ -354,7 +353,7 @@ void HotStuffApp::client_request_cmd_handler(MsgReqCmd &&msg, const conn_t &conn
     });
 }
 
-void HotStuffApp::start(const std::vector<std::pair<NetAddr, bytearray_t>> &reps, double delta) {
+void HotStuffApp::start(const std::vector<std::pair<NetAddr, std::string>> &reps, double delta) {
     ev_stat_timer = TimerEvent(ec, [this](TimerEvent &) {
         HotStuff::print_stat();
         HotStuffApp::print_stat();
