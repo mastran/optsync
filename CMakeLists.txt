@@ -49,6 +49,7 @@ include_directories(./)
 include_directories(include)
 include_directories(/usr/local/include)
 include_directories(/usr/local/include/pbc)
+include_directories(/usr/local/include/mcl)
 add_library(hotstuff
     OBJECT
     src/util.cpp
@@ -64,11 +65,11 @@ if(BUILD_SHARED)
     set_property(TARGET hotstuff PROPERTY POSITION_INDEPENDENT_CODE 1)
     add_library(hotstuff_shared SHARED $<TARGET_OBJECTS:hotstuff>)
     set_target_properties(hotstuff_shared PROPERTIES OUTPUT_NAME "hotstuff")
-    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto pbc gmp ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(hotstuff_shared salticidae_static secp256k1 crypto pbc mcl gmp ${CMAKE_THREAD_LIBS_INIT})
 endif()
 add_library(hotstuff_static STATIC $<TARGET_OBJECTS:hotstuff>)
 set_target_properties(hotstuff_static PROPERTIES OUTPUT_NAME "hotstuff")
-target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto pbc gmp ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(hotstuff_static salticidae_static secp256k1 crypto pbc mcl gmp ${CMAKE_THREAD_LIBS_INIT})
 
 add_subdirectory(test)
 
